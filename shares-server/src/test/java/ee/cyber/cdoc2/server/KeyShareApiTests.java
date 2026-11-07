@@ -20,6 +20,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
@@ -46,6 +48,9 @@ import static org.mockito.Mockito.when;
 
 
 @Slf4j
+// The mocked clock is in the real past, so shares that are unexpired for the mocked clock are
+// expired for the DB. Disable the scheduled clean-up so it cannot delete them mid-test.
+@TestPropertySource(properties = "key-share.expired.clean-up.cron=-")
 class KeyShareApiTests extends KeyShareIntegrationTest {
     private static final byte[] SHARE = new byte[128];
     private static final String SHARE_RECIPIENT = TEST_ETSI_RECIPIENT;
@@ -83,6 +88,9 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
 
     @Autowired
     private KeyShareExpiryConfigProperties keyShareExpiryConfig;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     public void setup() throws Exception {
@@ -403,25 +411,19 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
     }
 
     @Test
-    void createNonceForExpiredKeyShareShouldReturnUnauthorizedWhenSessionTokenExpired() {
-        // the share is expired as well, but the session token is checked first,
-        // so the caller gets the same 401 as for an unexpired share
-        String shareId = this.saveKeyShare(
-            createKeyShare(),
-            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED
-        ).getShareId();
-        when(clock.instant()).thenReturn(INSTANT_AFTER_SESSION_TOKEN_EXPIRED);
+    void shouldCreateKeyShareNonceForKeyShareWithoutExpiryTime() throws Exception {
+        // shares created before the expiry_time column was added have no expiry and never expire
+        String shareId = this.saveKeyShare(createKeyShare()).getShareId();
+        jdbcTemplate.update("UPDATE key_material_share SET expiry_time = NULL WHERE share_id = ?", shareId);
 
-        ApiException ex = assertThrows(
-            ApiException.class,
-            () -> client.createNonce(
-                shareId,
-                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
-                SID_SIGNING_CERTIFICATE_BASE64URL
-            )
+        NonceResponse response = client.createNonce(
+            shareId,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_SIGNING_CERTIFICATE_BASE64URL
         );
 
-        assertEquals(HttpStatus.UNAUTHORIZED.value(), ex.getCode());
+        assertNotNull(response);
+        assertEquals(1, this.shareNonceRepository.count());
     }
 
     @Test

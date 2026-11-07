@@ -262,7 +262,8 @@ public class KeyShareApiService implements KeySharesApiDelegate {
 
     /**
      * Find a key share that has not expired yet. A share whose expiry time has passed is treated
-     * as not found, even if the clean-up job has not deleted it yet.
+     * as not found, even if the clean-up job has not deleted it yet. A share without an expiry
+     * time (created before the expiry_time column existed) never expires, as before.
      *
      * @param shareId share id
      * @return the key share, or empty if it does not exist or has expired
@@ -270,7 +271,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     private Optional<KeyShareDb> findUnexpiredShare(String shareId) {
         Instant now = Instant.now(this.clock);
         return this.keyShareRepository.findById(shareId)
-            .filter(share -> now.isBefore(share.getExpiryTime()));
+            .filter(share -> share.getExpiryTime() == null || now.isBefore(share.getExpiryTime()));
     }
 
     private static void logAuthValidationFailure(Exception ex) {

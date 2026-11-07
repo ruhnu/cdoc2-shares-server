@@ -51,6 +51,7 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -180,39 +181,8 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
 
     @Test
     void shouldAuthenticateSidAuthTokenAndGetKeyShare() {
-        KeyShareDb keyShareDb = new KeyShareDb()
-            .setShareId(SHARE_ID)
-            .setShare(SHARE)
-            .setRecipient(ETSI_RECIPIENT)
-            .setExpiryTime(EXPIRY_TIME);
-
-        KeyShareNonceDb nonceDb = new KeyShareNonceDb()
-            .setShareId(SHARE_ID)
-            .setNonce(NONCE_BYTES)
-            .setId(1L);
-        nonceDb.setCreatedAt(Instant.now());
-
-        when(mockNativeWebRequest.getNativeRequest(HttpServletRequest.class)).thenReturn(mockHttpServletRequest);
-        when(mockHttpServletRequest.getHeader("X-Forwarded-Proto")).thenReturn("https");
-        when(mockHttpServletRequest.getHeader("X-Forwarded-Host")).thenReturn("localhost");
-        when(mockHttpServletRequest.getHeader("X-Forwarded-Port")).thenReturn("8443");
-        when(mockHttpServletRequest.getRequestURI()).thenReturn("/key-shares/" + SHARE_ID);
-
-        when(mockShareRep.findById(SHARE_ID)).thenReturn(Optional.of(keyShareDb));
-        when(mockNonceRep.findByShareIdAndNonce(eq(SHARE_ID), any())).thenReturn(Optional.of(nonceDb));
-
-        var resp = keyShareApiService.getKeyShareByShareId(
-            SHARE_ID,
-            SID_AUTH_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
-            SID_AUTH_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
-            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
-            SESSION_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
-            SIGNATURE_VALIDATION_PARAMS_BASE64URL,
-            CS_RP_SIGNED_HASH,
-            CS_RP_NAME,
-            CS_SIGNATURE_INPUT,
-            CS_SIGNATURE
-        );
+        // also the passing control for the expired-share tests below, which use the same fixture
+        var resp = getSidKeyShare(EXPIRY_TIME, Instant.now());
 
         assertTrue(resp.getStatusCode().is2xxSuccessful());
         assertTrue(resp.hasBody());
@@ -293,6 +263,13 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
     void shouldReturnUnauthorizedForExpiredKeyShareWhenSessionTokenIsInvalid() throws Exception {
         // authentication is checked before the share is looked up, so an expired share
         // gets the same 401 as an unexpired one
+        KeyShareDb expiredShare = new KeyShareDb()
+            .setShareId(SHARE_ID)
+            .setShare(SHARE)
+            .setRecipient(ETSI_RECIPIENT)
+            .setExpiryTime(Instant.now().minus(Duration.ofDays(1)));
+        // lenient: the point of the test is that the share is never looked up
+        lenient().when(mockShareRep.findById(SHARE_ID)).thenReturn(Optional.of(expiredShare));
         when(mockValidateSessionToken.execute(any(), any()))
             .thenThrow(new VerificationException("Session token validation failed"));
 
@@ -310,6 +287,7 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
         );
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        // stubbing is not an interaction: this fails only if findById was actually called
         verifyNoInteractions(mockShareRep);
     }
 
