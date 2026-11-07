@@ -13,7 +13,9 @@ import java.net.URL;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -69,6 +71,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     private final KeyShareNonceRepository shareNonceRepository;
     private final ValidateSessionToken validateSessionToken;
     private final ValidateAuthToken validateAuthToken;
+    private final Clock clock;
 
     @Override
     public Optional<NativeWebRequest> getRequest() {
@@ -136,7 +139,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED.value()).build();
         }
 
-        Optional<KeyShareDb> keyShareOptional = this.keyShareRepository.findById(shareId);
+        Optional<KeyShareDb> keyShareOptional = findUnexpiredShare(shareId);
 
         if (keyShareOptional.isEmpty()) {
             log.warn("Key share with shareId {} not found", shareId);
@@ -236,7 +239,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
         }
 
-        Optional<KeyShareDb> shareDbOpt = this.keyShareRepository.findById(shareId);
+        Optional<KeyShareDb> shareDbOpt = findUnexpiredShare(shareId);
         if (shareDbOpt.isEmpty()) {
             log.warn("Key share with shareId {} not found", shareId);
             return new ResponseEntity<>(HttpStatus.NOT_FOUND);
@@ -255,6 +258,19 @@ public class KeyShareApiService implements KeySharesApiDelegate {
                 DateTimeFormatter.ISO_INSTANT.format(shareDb.getExpiryTime())
             )
             .body(createKeyShare(shareDb));
+    }
+
+    /**
+     * Find a key share that has not expired yet. A share whose expiry time has passed is treated
+     * as not found, even if the clean-up job has not deleted it yet.
+     *
+     * @param shareId share id
+     * @return the key share, or empty if it does not exist or has expired
+     */
+    private Optional<KeyShareDb> findUnexpiredShare(String shareId) {
+        Instant now = Instant.now(this.clock);
+        return this.keyShareRepository.findById(shareId)
+            .filter(share -> now.isBefore(share.getExpiryTime()));
     }
 
     private static void logAuthValidationFailure(Exception ex) {

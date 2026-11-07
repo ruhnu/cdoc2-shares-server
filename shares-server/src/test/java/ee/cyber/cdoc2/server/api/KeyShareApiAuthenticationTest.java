@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -20,11 +22,13 @@ import org.springframework.boot.ssl.SslBundles;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.context.request.NativeWebRequest;
 
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 
+import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.Constants;
 import ee.cyber.cdoc2.server.KeyShareIntegrationTest;
 import ee.cyber.cdoc2.server.ValidateAuthToken;
@@ -35,6 +39,7 @@ import ee.cyber.cdoc2.server.config.NonceConfigProperties;
 import ee.cyber.cdoc2.server.config.RpServerConfigProperties;
 import ee.cyber.cdoc2.server.config.RpServerJwkConf;
 import ee.cyber.cdoc2.server.config.TrustedIssuers;
+import ee.cyber.cdoc2.server.generated.model.KeyShare;
 import ee.cyber.cdoc2.server.model.entity.KeyShareDb;
 import ee.cyber.cdoc2.server.model.entity.KeyShareNonceDb;
 import ee.cyber.cdoc2.server.model.repository.KeyShareNonceRepository;
@@ -46,6 +51,7 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 
@@ -156,7 +162,8 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
                 mockNonceRep,
                 new NonceConfigProperties(),
                 rpServerJwkConf
-            )
+            ),
+            Clock.systemUTC()
         );
 
         Resource resource = resourceLoader.getResource("classpath:rp-server-well-known.json");
@@ -254,6 +261,96 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
         assertTrue(resp.hasBody());
         assertEquals(MID_ETSI_RECIPIENT, resp.getBody().getRecipient());
         assertArrayEquals(SHARE, resp.getBody().getShare());
+    }
+
+    @Test
+    void shouldAuthenticateAndReturnNotFoundForExpiredKeyShare() {
+        Instant now = Instant.now();
+
+        var resp = getSidKeyShare(
+            now.minus(Duration.ofDays(1)),
+            now
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertFalse(resp.hasBody());
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenKeyShareExpiredAfterNonceWasCreated() {
+        Instant now = Instant.now();
+
+        var resp = getSidKeyShare(
+            now.minusSeconds(10),
+            now.minusSeconds(30)
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertFalse(resp.hasBody());
+    }
+
+    @Test
+    void shouldReturnUnauthorizedForExpiredKeyShareWhenSessionTokenIsInvalid() throws Exception {
+        // authentication is checked before the share is looked up, so an expired share
+        // gets the same 401 as an unexpired one
+        when(mockValidateSessionToken.execute(any(), any()))
+            .thenThrow(new VerificationException("Session token validation failed"));
+
+        var resp = keyShareApiService.getKeyShareByShareId(
+            SHARE_ID,
+            SID_AUTH_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_AUTH_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SESSION_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
+            SIGNATURE_VALIDATION_PARAMS_BASE64URL,
+            CS_RP_SIGNED_HASH,
+            CS_RP_NAME,
+            CS_SIGNATURE_INPUT,
+            CS_SIGNATURE
+        );
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        verifyNoInteractions(mockShareRep);
+    }
+
+    /**
+     * Requests the key share with the pre-generated SID auth token, the share stored with the given
+     * expiry time and the nonce created at the given time.
+     */
+    private ResponseEntity<KeyShare> getSidKeyShare(Instant shareExpiryTime, Instant nonceCreatedAt) {
+        KeyShareDb keyShareDb = new KeyShareDb()
+            .setShareId(SHARE_ID)
+            .setShare(SHARE)
+            .setRecipient(ETSI_RECIPIENT)
+            .setExpiryTime(shareExpiryTime);
+
+        KeyShareNonceDb nonceDb = new KeyShareNonceDb()
+            .setShareId(SHARE_ID)
+            .setNonce(NONCE_BYTES)
+            .setId(1L);
+        nonceDb.setCreatedAt(nonceCreatedAt);
+
+        when(mockNativeWebRequest.getNativeRequest(HttpServletRequest.class)).thenReturn(mockHttpServletRequest);
+        when(mockHttpServletRequest.getHeader("X-Forwarded-Proto")).thenReturn("https");
+        when(mockHttpServletRequest.getHeader("X-Forwarded-Host")).thenReturn("localhost");
+        when(mockHttpServletRequest.getHeader("X-Forwarded-Port")).thenReturn("8443");
+        when(mockHttpServletRequest.getRequestURI()).thenReturn("/key-shares/" + SHARE_ID);
+
+        when(mockShareRep.findById(SHARE_ID)).thenReturn(Optional.of(keyShareDb));
+        when(mockNonceRep.findByShareIdAndNonce(eq(SHARE_ID), any())).thenReturn(Optional.of(nonceDb));
+
+        return keyShareApiService.getKeyShareByShareId(
+            SHARE_ID,
+            SID_AUTH_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_AUTH_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SESSION_TOKEN_SIGNING_CERTIFICATE_BASE64URL,
+            SIGNATURE_VALIDATION_PARAMS_BASE64URL,
+            CS_RP_SIGNED_HASH,
+            CS_RP_NAME,
+            CS_SIGNATURE_INPUT,
+            CS_SIGNATURE
+        );
     }
 
 }

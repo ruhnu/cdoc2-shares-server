@@ -346,6 +346,85 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
     }
 
     @Test
+    void createNonceShouldReturnNotFoundForExpiredKeyShare() {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED.minus(Duration.ofHours(1))
+        ).getShareId();
+
+        ApiException ex = assertThrows(
+            ApiException.class,
+            () -> client.createNonce(
+                shareId,
+                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+                SID_SIGNING_CERTIFICATE_BASE64URL
+            )
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getCode());
+        assertEquals(0, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void createNonceShouldReturnNotFoundForKeyShareExpiringNow() {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED
+        ).getShareId();
+
+        ApiException ex = assertThrows(
+            ApiException.class,
+            () -> client.createNonce(
+                shareId,
+                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+                SID_SIGNING_CERTIFICATE_BASE64URL
+            )
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getCode());
+        assertEquals(0, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void shouldCreateKeyShareNonceForKeyShareNotYetExpired() throws Exception {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED.plusSeconds(1)
+        ).getShareId();
+
+        NonceResponse response = client.createNonce(
+            shareId,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_SIGNING_CERTIFICATE_BASE64URL
+        );
+
+        assertNotNull(response);
+        assertEquals(1, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void createNonceForExpiredKeyShareShouldReturnUnauthorizedWhenSessionTokenExpired() {
+        // the share is expired as well, but the session token is checked first,
+        // so the caller gets the same 401 as for an unexpired share
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED
+        ).getShareId();
+        when(clock.instant()).thenReturn(INSTANT_AFTER_SESSION_TOKEN_EXPIRED);
+
+        ApiException ex = assertThrows(
+            ApiException.class,
+            () -> client.createNonce(
+                shareId,
+                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+                SID_SIGNING_CERTIFICATE_BASE64URL
+            )
+        );
+
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), ex.getCode());
+    }
+
+    @Test
     void createNonceShouldReturnUnauthorizedWhenSessionTokenExpired() {
         String shareId = "SHARE_ID_MIN_LENGTH_SHOULD_BE_32";
         when(clock.instant()).thenReturn(INSTANT_AFTER_SESSION_TOKEN_EXPIRED);
@@ -501,11 +580,22 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
      * @return the saved key share
      */
     protected KeyShareDb saveKeyShare(ee.cyber.cdoc2.client.model.KeyShare dto) {
+        return saveKeyShare(dto, EXPIRY_TIME);
+    }
+
+    /**
+     * Saves the key share into database with the given expiry time
+     *
+     * @param dto the key share dto
+     * @param expiryTime the expiry time of the key share
+     * @return the saved key share
+     */
+    protected KeyShareDb saveKeyShare(ee.cyber.cdoc2.client.model.KeyShare dto, Instant expiryTime) {
         return this.shareRepository.save(
             new KeyShareDb()
                 .setRecipient(dto.getRecipient())
                 .setShare(dto.getShare())
-                .setExpiryTime(EXPIRY_TIME)
+                .setExpiryTime(expiryTime)
         );
     }
 

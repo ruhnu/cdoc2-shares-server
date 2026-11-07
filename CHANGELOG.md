@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug fixes
+* Expired key shares are no longer served. The nonce (`POST /key-shares/{shareId}/nonce`) and
+  get-share (`GET /key-shares/{shareId}`) endpoints now respond 404 Not Found as soon as a share's
+  expiry time has passed, instead of serving it until the scheduled clean-up job deletes it.
+  Authentication is still checked first, so the response is the same as for a deleted share.
+
 ## [0.8.3]
 
 ### Improvements
