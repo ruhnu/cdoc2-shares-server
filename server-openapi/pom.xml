@@ -12,7 +12,7 @@
     </parent>
 
     <artifactId>cdoc2-css-openapi</artifactId>
-    <version>0.1.2</version>
+    <version>0.2.0-SNAPSHOT</version>
     <description>CDOC2 shares server stub generation from OpenAPI spec</description>
 
     <properties>
@@ -28,7 +28,7 @@
         <spotbugs-annotations.version>4.10.3</spotbugs-annotations.version>
 
         <!--info.version from cdoc2-openapi/cdoc2-key-shares-openapi.yaml -->
-        <cdoc2-key-shares-openapi.version>1.3.2-draft</cdoc2-key-shares-openapi.version>
+        <cdoc2-key-shares-openapi.version>1.4.0-draft</cdoc2-key-shares-openapi.version>
 
     </properties>
 

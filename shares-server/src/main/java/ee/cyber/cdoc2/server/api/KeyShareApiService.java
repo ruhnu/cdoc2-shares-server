@@ -2,7 +2,6 @@ package ee.cyber.cdoc2.server.api;
 
 import jakarta.annotation.Nullable;
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -27,6 +26,9 @@ import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.x509.Certificate;
 import org.bouncycastle.asn1.x509.KeyUsage;
 import org.bouncycastle.cert.X509CertificateHolder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -34,13 +36,16 @@ import org.springframework.web.context.request.NativeWebRequest;
 
 import com.nimbusds.jose.util.X509CertUtils;
 
+import ee.cyber.cdoc2.auth.SshPublicKeyParser;
 import ee.cyber.cdoc2.auth.TokenVerificationResponse;
+import ee.cyber.cdoc2.auth.exception.InvalidSshPublicKeyException;
 import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.Constants;
 import ee.cyber.cdoc2.server.ValidateAuthToken;
 import ee.cyber.cdoc2.server.ValidateSessionToken;
 import ee.cyber.cdoc2.server.config.AuthCertificateConfigProperties;
 import ee.cyber.cdoc2.server.config.KeyShareExpiryConfigProperties;
+import ee.cyber.cdoc2.server.config.RuhnuConfigProperties;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApi;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApiController;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApiDelegate;
@@ -62,8 +67,13 @@ import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.methodOn;
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class KeyShareApiService implements KeySharesApiDelegate {
+    /** Upstream recipient maxLength, enforced while ruhnu features are disabled */
+    private static final int UPSTREAM_RECIPIENT_MAX_LENGTH = 32;
+
+    /** Release audit log, written while ruhnu features are enabled */
+    private static final Logger AUDIT_LOG = LoggerFactory.getLogger("ee.cyber.cdoc2.server.audit");
+
     private final AuthCertificateConfigProperties certificateConfig;
     private final KeyShareExpiryConfigProperties keyShareExpiryConfig;
     private final NativeWebRequest nativeWebRequest;
@@ -72,6 +82,49 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     private final ValidateSessionToken validateSessionToken;
     private final ValidateAuthToken validateAuthToken;
     private final Clock clock;
+    private final RuhnuConfigProperties ruhnuConfig;
+
+    /**
+     * Create service with ruhnu fork features disabled (upstream behaviour)
+     */
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public KeyShareApiService(
+        AuthCertificateConfigProperties certificateConfig,
+        KeyShareExpiryConfigProperties keyShareExpiryConfig,
+        NativeWebRequest nativeWebRequest,
+        KeyShareRepository keyShareRepository,
+        KeyShareNonceRepository shareNonceRepository,
+        ValidateSessionToken validateSessionToken,
+        ValidateAuthToken validateAuthToken,
+        Clock clock
+    ) {
+        this(certificateConfig, keyShareExpiryConfig, nativeWebRequest, keyShareRepository, shareNonceRepository,
+            validateSessionToken, validateAuthToken, clock, RuhnuConfigProperties.disabled());
+    }
+
+    @Autowired
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public KeyShareApiService(
+        AuthCertificateConfigProperties certificateConfig,
+        KeyShareExpiryConfigProperties keyShareExpiryConfig,
+        NativeWebRequest nativeWebRequest,
+        KeyShareRepository keyShareRepository,
+        KeyShareNonceRepository shareNonceRepository,
+        ValidateSessionToken validateSessionToken,
+        ValidateAuthToken validateAuthToken,
+        Clock clock,
+        RuhnuConfigProperties ruhnuConfig
+    ) {
+        this.certificateConfig = certificateConfig;
+        this.keyShareExpiryConfig = keyShareExpiryConfig;
+        this.nativeWebRequest = nativeWebRequest;
+        this.keyShareRepository = keyShareRepository;
+        this.shareNonceRepository = shareNonceRepository;
+        this.validateSessionToken = validateSessionToken;
+        this.validateAuthToken = validateAuthToken;
+        this.clock = clock;
+        this.ruhnuConfig = ruhnuConfig;
+    }
 
     @Override
     public Optional<NativeWebRequest> getRequest() {
@@ -87,7 +140,22 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             keyShare.getShare().length, keyShare.getRecipient()
         );
 
-        ExpiryTimeData expiryTimeData = getExpiryTime(xExpiryTime);
+        if (!ruhnuConfig.enabled() && keyShare.getRecipient().length() > UPSTREAM_RECIPIENT_MAX_LENGTH) {
+            // upstream API document limits recipient to 32 characters
+            log.warn("Recipient longer than {} characters", UPSTREAM_RECIPIENT_MAX_LENGTH);
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+        }
+
+        if (ruhnuConfig.enabled() && isSshPkRecipient(keyShare.getRecipient())) {
+            try {
+                SshPublicKeyParser.validateRecipientId(keyShare.getRecipient());
+            } catch (InvalidSshPublicKeyException e) {
+                log.warn("Invalid SSH public key recipient: {}", e.getMessage());
+                return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+            }
+        }
+
+        ExpiryTimeData expiryTimeData = getExpiryTime(keyShare.getRecipient(), xExpiryTime);
 
         try {
             var saved = this.keyShareRepository.save(
@@ -131,6 +199,16 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             body
         );
 
+        if (xSessionToken == null && xSessionCert == null && ruhnuConfig.enabled()) {
+            return createAndSaveSshPkNonce(shareId);
+        }
+
+        // upstream API document makes both headers mandatory
+        if (xSessionToken == null || xSessionCert == null) {
+            log.warn("x-cdoc2-session-token or x-cdoc2-session-x5c header missing");
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+        }
+
         TokenVerificationResponse verificationResponse;
         try {
             verificationResponse = validateSessionToken.execute(xSessionToken, xSessionCert);
@@ -154,9 +232,34 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return new ResponseEntity<>(HttpStatus.NOT_FOUND);
         }
 
+        return saveNonce(keyShare);
+    }
+
+    /**
+     * Nonce for "ruhnu/pk/" SSH public key recipient share, no session token required. Possession of the key
+     * is proven later by the auth token signature.
+     */
+    private ResponseEntity<NonceResponse> createAndSaveSshPkNonce(String shareId) {
+        Optional<KeyShareDb> keyShareOptional = findUnexpiredShare(shareId);
+        if (keyShareOptional.isEmpty()) {
+            log.warn("Key share with shareId {} not found", shareId);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        KeyShareDb keyShare = keyShareOptional.get();
+        if (!isSshPkRecipient(keyShare.getRecipient())) {
+            log.warn("x-cdoc2-session-token or x-cdoc2-session-x5c header missing");
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+        }
+
+        return saveNonce(keyShare);
+    }
+
+    private ResponseEntity<NonceResponse> saveNonce(KeyShareDb keyShare) {
+        String shareId = keyShare.getShareId();
         try {
             var saved = this.shareNonceRepository.save(
-                new KeyShareNonceDb().setShareId(keyShare.getShareId())
+                new KeyShareNonceDb().setShareId(shareId)
             );
 
             log.info("KeyShareNonce(shareId = {}, nonce = {}) created", shareId, saved.getNonce());
@@ -184,6 +287,16 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         String signatureInput,
         String signature
     ) {
+        if (ruhnuConfig.enabled() && ValidateAuthToken.isSshPkToken(xAuthToken)) {
+            return getSshPkKeyShare(shareId, xAuthToken);
+        }
+
+        // upstream API document makes these headers mandatory
+        if (xSessionToken == null || xSessionCert == null) {
+            log.warn("x-cdoc2-session-token or x-cdoc2-session-x5c header missing");
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+        }
+
         // openapi generator adds check for @NotNull, but not for isEmpty()
         // X509CertUtils.parseWithException will return null, when cert is empty string ("")
         if (xAuthCert == null || xAuthCert.isEmpty()) {
@@ -252,12 +365,72 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return new ResponseEntity<>(HttpStatus.NOT_FOUND);
         }
 
+        return releaseShare(shareDb);
+    }
+
+    /**
+     * Get share for auth token signed by "ruhnu/pk/" SSH public key. Same order as the Smart-ID/Mobile-ID path:
+     * verify token (including "aud" and nonce), look up share, compare verified identity with share recipient.
+     */
+    private ResponseEntity<KeyShare> getSshPkKeyShare(String shareId, String xAuthToken) {
+        String tokenRecipient;
+        try {
+            tokenRecipient = validateAuthToken.executeSshPk(
+                shareId,
+                xAuthToken,
+                extractRequestURL(this.nativeWebRequest)
+            ).identifier();
+        } catch (VerificationException | MalformedURLException ex) {
+            logAuthValidationFailure(ex);
+            return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+        }
+
+        Optional<KeyShareDb> shareDbOpt = findUnexpiredShare(shareId);
+        if (shareDbOpt.isEmpty()) {
+            log.warn("Key share with shareId {} not found", shareId);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        KeyShareDb shareDb = shareDbOpt.get();
+        if (!tokenRecipient.equals(shareDb.getRecipient())) {
+            log.warn("Key share with shareId {} doesn't match token issuer", shareId);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        return releaseShare(shareDb);
+    }
+
+    private ResponseEntity<KeyShare> releaseShare(KeyShareDb shareDb) {
+        if (ruhnuConfig.enabled()) {
+            AUDIT_LOG.info("Key share released: shareId={}, recipient={}, time={}",
+                shareDb.getShareId(), auditRecipient(shareDb.getRecipient()), Instant.now(this.clock));
+        }
+
         return ResponseEntity.ok()
             .header(
                 Constants.X_EXPIRY_TIME_HEADER,
                 DateTimeFormatter.ISO_INSTANT.format(shareDb.getExpiryTime())
             )
             .body(createKeyShare(shareDb));
+    }
+
+    /**
+     * Recipient for the audit log: "ruhnu/pk:SHA256:..." OpenSSH fingerprint for SSH public key recipients.
+     * Other recipients (etsi/ personal identification codes) are not logged, as in upstream logging.
+     */
+    private static String auditRecipient(String recipient) {
+        if (isSshPkRecipient(recipient)) {
+            try {
+                return "ruhnu/pk:" + SshPublicKeyParser.fingerprintFromRecipientId(recipient);
+            } catch (InvalidSshPublicKeyException e) {
+                return "ruhnu/pk:invalid";
+            }
+        }
+        return "redacted";
+    }
+
+    private static boolean isSshPkRecipient(String recipient) {
+        return recipient != null && recipient.startsWith(SshPublicKeyParser.RECIPIENT_ID_PREFIX);
     }
 
     /**
@@ -278,10 +451,18 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         log.warn("Auth validation has failed: {}", ex.getMessage());
     }
 
-    private ExpiryTimeData getExpiryTime(LocalDateTime xExpiryTime) {
-        OffsetDateTime xMaxExpiryTime = getCapsuleExpirationTime(
-            keyShareExpiryConfig.maxExpirationDuration()
-        );
+    private ExpiryTimeData getExpiryTime(String recipient, LocalDateTime xExpiryTime) {
+        Duration maxDuration;
+        Duration defaultDuration;
+        if (ruhnuConfig.enabled() && isSshPkRecipient(recipient)) {
+            maxDuration = ruhnuConfig.pk().maxExpirationDuration();
+            defaultDuration = ruhnuConfig.pk().defaultExpirationDuration();
+        } else {
+            maxDuration = Duration.parse(keyShareExpiryConfig.maxExpirationDuration());
+            defaultDuration = Duration.parse(keyShareExpiryConfig.defaultExpirationDuration());
+        }
+
+        OffsetDateTime xMaxExpiryTime = getCapsuleExpirationTime(maxDuration);
 
         if (null != xExpiryTime) {
             if (toOffsetDateTime(xExpiryTime).isAfter(xMaxExpiryTime)) {
@@ -291,15 +472,13 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return new ExpiryTimeData(toOffsetDateTime(xExpiryTime), false);
         } else {
             return new ExpiryTimeData(
-                getCapsuleExpirationTime(keyShareExpiryConfig.defaultExpirationDuration()),
+                getCapsuleExpirationTime(defaultDuration),
                 false
             );
         }
     }
 
-    private static OffsetDateTime getCapsuleExpirationTime(String duration) {
-        Duration expiryDuration = Duration.parse(duration);
-
+    private static OffsetDateTime getCapsuleExpirationTime(Duration expiryDuration) {
         return OffsetDateTime.now()
             .toInstant()
             .atZone(ZoneOffset.UTC)

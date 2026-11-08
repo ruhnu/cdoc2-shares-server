@@ -137,6 +137,50 @@ cdoc2.nonce.expiration.seconds=300
 key-share-nonce.expired.clean-up.cron=0 0/5 * * * ?
 ```
 
+## SSH public key recipients (ruhnu fork, `cdoc2.ruhnu.*`)
+
+Fork features are switched on with one feature flag, off by default:
+
+`application.properties`:
+```
+# Enable SSH public key recipients, per recipient type expiry and the share release audit log.
+# Default false: the server behaves as upstream cdoc2-shares-server.
+cdoc2.ruhnu.enabled=false
+
+# Expiry of "ruhnu/pk/" shares, used only while cdoc2.ruhnu.enabled=true.
+# Format P(n)DT(n)H(n)M(n)S, both default to 14 days
+cdoc2.ruhnu.pk.default-expiration-duration=P14D
+cdoc2.ruhnu.pk.max-expiration-duration=P14D
+```
+
+**Flag off equals upstream.** With `cdoc2.ruhnu.enabled=false` every request gets the same response status as
+from upstream. The key-shares API document no longer makes `x-cdoc2-auth-x5c`, `x-cdoc2-session-token` and
+`x-cdoc2-session-x5c` mandatory and allows recipients up to 255 characters, so the server repeats the upstream
+checks in code: a missing header gives `400`, and a recipient longer than 32 characters gives `400` on create.
+Two changes are not behind the flag: the wider `key_material_share.recipient` column (Liquibase changeset 011)
+and the relaxed API document. Both only widen what is accepted.
+
+**With the flag on:**
+- Shares can be created for recipients `ruhnu/pk/<base64 OpenSSH public key blob>`. The key must be ECDSA
+  P-256 (`ecdsa-sha2-nistp256`) and the blob padded standard base64, otherwise create responds `400`.
+- `POST /key-shares/{shareId}/nonce` without both session headers issues a nonce for a `ruhnu/pk/` share
+  (`404` if the share does not exist or has expired, `400` for other recipients). Requests with a session
+  header are handled as before.
+- `GET /key-shares/{shareId}` with an auth token whose `iss` starts with `ruhnu/pk/` is verified with the
+  public key in `iss` (JWS `ES256`). No session token, certificate, Smart-ID parameters or RP countersignature
+  are needed. The audience, shareId and nonce checks are the same as for Smart-ID/Mobile-ID, and the share is
+  released only if `iss` equals the share recipient. Other tokens take the Smart-ID/Mobile-ID path unchanged.
+- `ruhnu/pk/` shares get the `cdoc2.ruhnu.pk.*` lifetimes. A client may request a shorter one with
+  `x-expiry-time`; a longer one is cut to the maximum. Other recipients keep `key-share.*-expiration-duration`.
+- Every successful share release, for all recipient types, is logged at `INFO` to logger
+  `ee.cyber.cdoc2.server.audit`: `Key share released: shareId=..., recipient=..., time=...`.
+  For `ruhnu/pk/` recipients `recipient` is the key's OpenSSH fingerprint (`ruhnu/pk:SHA256:...`, as shown
+  by `ssh-keygen -l` and `ssh-add -l`). Other recipients are logged as `redacted`, so personal identification
+  codes of `etsi/` recipients are not written to the log.
+
+Access to a `ruhnu/pk/` share ends when it expires. To revoke earlier, delete the recipient's rows from
+`key_material_share` on at least one shares server.
+
 ## Logging
 
 `cdoc2-shares-server` uses following lines to configure logging from `application.properties`:

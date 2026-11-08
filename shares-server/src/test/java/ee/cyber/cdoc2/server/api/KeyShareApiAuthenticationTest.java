@@ -28,9 +28,13 @@ import org.springframework.web.context.request.NativeWebRequest;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.Constants;
 import ee.cyber.cdoc2.server.KeyShareIntegrationTest;
+import ee.cyber.cdoc2.server.SshPkTestData;
 import ee.cyber.cdoc2.server.ValidateAuthToken;
 import ee.cyber.cdoc2.server.ValidateSessionToken;
 import ee.cyber.cdoc2.server.config.AuthCertificateConfigProperties;
@@ -38,6 +42,7 @@ import ee.cyber.cdoc2.server.config.KeyShareExpiryConfigProperties;
 import ee.cyber.cdoc2.server.config.NonceConfigProperties;
 import ee.cyber.cdoc2.server.config.RpServerConfigProperties;
 import ee.cyber.cdoc2.server.config.RpServerJwkConf;
+import ee.cyber.cdoc2.server.config.RuhnuConfigProperties;
 import ee.cyber.cdoc2.server.config.TrustedIssuers;
 import ee.cyber.cdoc2.server.generated.model.KeyShare;
 import ee.cyber.cdoc2.server.model.entity.KeyShareDb;
@@ -295,11 +300,92 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
      * Requests the key share with the pre-generated SID auth token, the share stored with the given
      * expiry time and the nonce created at the given time.
      */
+    // --- cdoc2.ruhnu.enabled: Smart-ID path with the flag on, release audit log ---
+
+    @Test
+    void shouldAuthenticateSidAuthTokenWithRuhnuEnabledAndWriteAuditLog() {
+        keyShareApiService = createService(true);
+        ListAppender<ILoggingEvent> auditLog = SshPkTestData.startAuditLogCapture();
+        try {
+            var resp = getSidKeyShare(EXPIRY_TIME, Instant.now());
+
+            assertTrue(resp.getStatusCode().is2xxSuccessful());
+            assertEquals(ETSI_RECIPIENT, resp.getBody().getRecipient());
+            assertEquals(1, auditLog.list.size());
+            String line = auditLog.list.get(0).getFormattedMessage();
+            assertTrue(line.contains("shareId=" + SHARE_ID), line);
+            // personal identification code is not logged
+            assertTrue(line.contains("recipient=redacted"), line);
+            assertFalse(line.contains(SID_DEMO_IDENTIFIER), line);
+            assertTrue(line.contains("time="), line);
+        } finally {
+            SshPkTestData.stopAuditLogCapture(auditLog);
+        }
+    }
+
+    @Test
+    void shouldNotWriteAuditLogWithRuhnuDisabled() {
+        ListAppender<ILoggingEvent> auditLog = SshPkTestData.startAuditLogCapture();
+        try {
+            var resp = getSidKeyShare(EXPIRY_TIME, Instant.now());
+
+            assertTrue(resp.getStatusCode().is2xxSuccessful());
+            assertTrue(auditLog.list.isEmpty());
+        } finally {
+            SshPkTestData.stopAuditLogCapture(auditLog);
+        }
+    }
+
+    @Test
+    void shouldNotReleaseSshPkShareForSidCredentials() {
+        keyShareApiService = createService(true);
+        ListAppender<ILoggingEvent> auditLog = SshPkTestData.startAuditLogCapture();
+        try {
+            var resp = getSidKeyShare(SshPkTestData.SshKey.generate().recipientId(), EXPIRY_TIME, Instant.now());
+
+            assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+            assertFalse(resp.hasBody());
+            assertTrue(auditLog.list.isEmpty());
+        } finally {
+            SshPkTestData.stopAuditLogCapture(auditLog);
+        }
+    }
+
+    private KeyShareApiService createService(boolean ruhnuEnabled) {
+        RuhnuConfigProperties ruhnuConfig = ruhnuEnabled
+            ? new RuhnuConfigProperties(true, RuhnuConfigProperties.disabled().pk())
+            : RuhnuConfigProperties.disabled();
+        return new KeyShareApiService(
+            new AuthCertificateConfigProperties(),
+            new KeyShareExpiryConfigProperties(),
+            mockNativeWebRequest,
+            mockShareRep,
+            mockNonceRep,
+            mockValidateSessionToken,
+            new ValidateAuthToken(
+                trustedIssuers,
+                new AuthCertificateConfigProperties(),
+                new RpServerConfigProperties(),
+                mockNonceRep,
+                new NonceConfigProperties(),
+                rpServerJwkConf
+            ),
+            Clock.systemUTC(),
+            ruhnuConfig
+        );
+    }
+
     private ResponseEntity<KeyShare> getSidKeyShare(Instant shareExpiryTime, Instant nonceCreatedAt) {
+        return getSidKeyShare(ETSI_RECIPIENT, shareExpiryTime, nonceCreatedAt);
+    }
+
+    private ResponseEntity<KeyShare> getSidKeyShare(
+        String shareRecipient, Instant shareExpiryTime, Instant nonceCreatedAt
+    ) {
         KeyShareDb keyShareDb = new KeyShareDb()
             .setShareId(SHARE_ID)
             .setShare(SHARE)
-            .setRecipient(ETSI_RECIPIENT)
+            .setRecipient(shareRecipient)
             .setExpiryTime(shareExpiryTime);
 
         KeyShareNonceDb nonceDb = new KeyShareNonceDb()

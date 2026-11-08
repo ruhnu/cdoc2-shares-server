@@ -50,7 +50,7 @@ public class KeyShareDb extends AuditEntity {
 
     @NotNull
     @Column
-    @Size(min = 12, max = 32)
+    @Size(min = 12, max = 255)
     private String recipient;
 
     @NotNull
