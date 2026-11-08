@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.TestPropertySource;
 
 import ee.cyber.cdoc2.server.SshPkTestData.SshKey;
 
@@ -13,9 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 
 /**
- * With {@code cdoc2.ruhnu.enabled} not set (default false) the server must respond as upstream, including the
- * header and recipient length checks that the upstream API document makes mandatory.
+ * With {@code cdoc2.ruhnu.enabled=false} (the default) the server must respond as upstream, including the
+ * header and recipient length checks that the upstream API document makes mandatory. Pinned to false, so that
+ * the class also runs when the flag is switched on for the whole suite.
  */
+@TestPropertySource(properties = "cdoc2.ruhnu.enabled=false")
 class RuhnuDisabledApiTests extends RuhnuApiTestBase {
 
     private final SshKey key = SshKey.generate();

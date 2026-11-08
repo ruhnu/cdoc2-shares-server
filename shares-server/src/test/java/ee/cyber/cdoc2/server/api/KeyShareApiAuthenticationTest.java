@@ -138,6 +138,10 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
     @Autowired
     private RpServerJwkConf rpServerJwkConf;
 
+    // cdoc2.ruhnu.enabled of the test run, so that these tests also run with the flag on
+    @Autowired
+    private RuhnuConfigProperties ruhnuConfig;
+
     private KeyShareApiService keyShareApiService;
 
     @RegisterExtension
@@ -169,7 +173,8 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
                 new NonceConfigProperties(),
                 rpServerJwkConf
             ),
-            Clock.systemUTC()
+            Clock.systemUTC(),
+            ruhnuConfig
         );
 
         Resource resource = resourceLoader.getResource("classpath:rp-server-well-known.json");
@@ -325,6 +330,7 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
 
     @Test
     void shouldNotWriteAuditLogWithRuhnuDisabled() {
+        keyShareApiService = createService(false);
         ListAppender<ILoggingEvent> auditLog = SshPkTestData.startAuditLogCapture();
         try {
             var resp = getSidKeyShare(EXPIRY_TIME, Instant.now());
@@ -352,7 +358,7 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
     }
 
     private KeyShareApiService createService(boolean ruhnuEnabled) {
-        RuhnuConfigProperties ruhnuConfig = ruhnuEnabled
+        RuhnuConfigProperties config = ruhnuEnabled
             ? new RuhnuConfigProperties(true, RuhnuConfigProperties.disabled().pk())
             : RuhnuConfigProperties.disabled();
         return new KeyShareApiService(
@@ -371,7 +377,7 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
                 rpServerJwkConf
             ),
             Clock.systemUTC(),
-            ruhnuConfig
+            config
         );
     }
 
