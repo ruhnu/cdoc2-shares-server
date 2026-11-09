@@ -1,0 +1,227 @@
+# Builds ruhnu-shares-server and ruhnu-shares-server-liquibase images for
+# linux/amd64 and linux/arm64 and publishes them to ghcr.io.
+#
+# Triggered by pushing a tag. The workflow file is read from the tagged commit,
+# so feature branches can be built before this file is on the default branch.
+#   v*    -> image tags <git tag> and latest
+#   dev-* -> image tag <git tag> only
+name: Build and publish ruhnu Docker images
+
+on:
+  push:
+    tags: [ 'v*', 'dev-*' ]
+
+env:
+  REGISTRY: ghcr.io
+  SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/ruhnu-shares-server
+  LIQUIBASE_IMAGE: ghcr.io/${{ github.repository_owner }}/ruhnu-shares-server-liquibase
+  # OCI image labels. ghcr.io shows the description on the package page; for
+  # multi-arch images it reads it from the index annotations.
+  SERVER_DESCRIPTION: >-
+    Key shares server for Ruhnu: revocable, audited access to secrets in Git
+    using SSH keys. Fork of open-eid/cdoc2-shares-server.
+  LIQUIBASE_DESCRIPTION: Liquibase database migrations for ruhnu-shares-server.
+  OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+  OCI_DOCUMENTATION: https://github.com/ruhnu
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      latest: ${{ steps.tag.outputs.latest }}
+      created: ${{ steps.tag.outputs.created }}
+    steps:
+      - id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Docker tags allow only [A-Za-z0-9_.-]
+          echo "tag=${REF_NAME//[^A-Za-z0-9_.-]/-}" >> "$GITHUB_OUTPUT"
+          # one build time for all images, ISO 8601 instant
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [[ "$REF_NAME" == v* ]]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Buildpacks can't cross-build, so each architecture builds on its own runner.
+  shares-server:
+    needs: meta
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          overwrite-settings: true # settings.xml with server id "github"
+          cache: maven
+
+      # cdoc2 dependencies are not published anywhere CI can reach; build them
+      # from the ruhnu forks at the refs pinned in .github/ruhnu-deps.env.
+      - name: Read sibling refs
+        id: deps
+        run: grep -E '^[A-Z0-9_]+=' .github/ruhnu-deps.env >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/cdoc2-openapi
+          ref: ${{ steps.deps.outputs.CDOC2_OPENAPI_REF }}
+          path: deps/cdoc2-openapi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/cdoc2-auth
+          ref: ${{ steps.deps.outputs.CDOC2_AUTH_REF }}
+          path: deps/cdoc2-auth
+
+      # Static analysis is skipped: it belongs to the siblings' own CI, and
+      # under deps/ Maven picks up this repo's .mvn and spotbugs-exclude.xml.
+      - name: Build sibling dependencies
+        run: |
+          for d in deps/cdoc2-openapi deps/cdoc2-auth; do
+            mvn -B -f "$d" install -Dmaven.test.skip=true \
+              -Dspotbugs.skip=true -Dcheckstyle.skip=true
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Build modules
+        run: mvn -B install -Dmaven.test.skip=true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Build and push image
+        run: |
+          mvn -B -f shares-server spring-boot:build-image \
+            -Dmaven.test.skip=true \
+            -Dspring-boot.build-image.imagePlatform=linux/${{ matrix.arch }} \
+            -Dspring-boot.build-image.imageName=${SERVER_IMAGE}:${TAG}-${{ matrix.arch }} \
+            -Dspring-boot.build-image.publish=true \
+            -Ddocker.publishRegistry.url=${REGISTRY} \
+            -Ddocker.publishRegistry.username=${{ github.actor }} \
+            -Ddocker.publishRegistry.password=${GITHUB_TOKEN} \
+            -Dspring-boot.build-image.createdDate=${CREATED} \
+            -Dbp.oci.title=ruhnu-shares-server \
+            "-Dbp.oci.description=${SERVER_DESCRIPTION}" \
+            -Dbp.oci.version=${TAG} \
+            -Dbp.oci.revision=${GITHUB_SHA} \
+            -Dbp.oci.source=${OCI_SOURCE} \
+            -Dbp.oci.created=${CREATED} \
+            -Dbp.oci.documentation=${OCI_DOCUMENTATION}
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          CREATED: ${{ needs.meta.outputs.created }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+  shares-server-manifest:
+    needs: [ meta, shares-server ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Buildpacks push Docker v2 manifests, from which imagetools makes a
+      # Docker manifest list. That format has no annotations, so the index
+      # annotations below would be dropped silently. Convert to OCI first
+      # (skopeo is preinstalled on ubuntu-24.04 runners).
+      - name: Convert per-arch images to OCI
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          for arch in amd64 arm64; do
+            skopeo copy --format oci \
+              "docker://${SERVER_IMAGE}:${TAG}-${arch}" \
+              "docker://${SERVER_IMAGE}:${TAG}-${arch}"
+          done
+
+      - name: Create multi-arch manifest
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          LATEST: ${{ needs.meta.outputs.latest }}
+          CREATED: ${{ needs.meta.outputs.created }}
+        run: |
+          tags=(-t "${SERVER_IMAGE}:${TAG}")
+          if [[ "$LATEST" == true ]]; then tags+=(-t "${SERVER_IMAGE}:latest"); fi
+          a=index:org.opencontainers.image
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "${a}.title=ruhnu-shares-server" \
+            --annotation "${a}.description=${SERVER_DESCRIPTION}" \
+            --annotation "${a}.version=${TAG}" \
+            --annotation "${a}.revision=${GITHUB_SHA}" \
+            --annotation "${a}.source=${OCI_SOURCE}" \
+            --annotation "${a}.created=${CREATED}" \
+            --annotation "${a}.documentation=${OCI_DOCUMENTATION}" \
+            "${SERVER_IMAGE}:${TAG}-amd64" \
+            "${SERVER_IMAGE}:${TAG}-arm64"
+
+  # The liquibase Dockerfile has no RUN steps, so buildx builds both
+  # platforms on one runner without emulation.
+  liquibase:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Image tags
+        id: tags
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          LATEST: ${{ needs.meta.outputs.latest }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${LIQUIBASE_IMAGE}:${TAG}"
+            if [[ "$LATEST" == true ]]; then echo "${LIQUIBASE_IMAGE}:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: server-db/src/main/resources/db
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=ruhnu-shares-server-liquibase
+            org.opencontainers.image.description=${{ env.LIQUIBASE_DESCRIPTION }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            org.opencontainers.image.created=${{ needs.meta.outputs.created }}
+            org.opencontainers.image.documentation=${{ env.OCI_DOCUMENTATION }}
+          annotations: |
+            index:org.opencontainers.image.title=ruhnu-shares-server-liquibase
+            index:org.opencontainers.image.description=${{ env.LIQUIBASE_DESCRIPTION }}
+            index:org.opencontainers.image.version=${{ needs.meta.outputs.tag }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            index:org.opencontainers.image.created=${{ needs.meta.outputs.created }}
+            index:org.opencontainers.image.documentation=${{ env.OCI_DOCUMENTATION }}
