@@ -61,12 +61,35 @@ jobs:
           overwrite-settings: true # settings.xml with server id "github"
           cache: maven
 
+      # cdoc2 dependencies are not published anywhere CI can reach; build them
+      # from the ruhnu forks at the refs pinned in .github/ruhnu-deps.env.
+      - name: Read sibling refs
+        id: deps
+        run: grep -E '^[A-Z0-9_]+=' .github/ruhnu-deps.env >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/cdoc2-openapi
+          ref: ${{ steps.deps.outputs.CDOC2_OPENAPI_REF }}
+          path: deps/cdoc2-openapi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/cdoc2-auth
+          ref: ${{ steps.deps.outputs.CDOC2_AUTH_REF }}
+          path: deps/cdoc2-auth
+
+      - name: Build sibling dependencies
+        run: |
+          mvn -B -f deps/cdoc2-openapi install -Dmaven.test.skip=true
+          mvn -B -f deps/cdoc2-auth install -Dmaven.test.skip=true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       - name: Build modules
         run: mvn -B install -Dmaven.test.skip=true
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # Maven repo for cdoc2 dependencies, see pom.xml
-          MAVEN_REPO: ${{ vars.MAVEN_REPO || 'open-eid/cdoc2-shares-server' }}
 
       - name: Build and push image
         run: |
@@ -81,7 +104,6 @@ jobs:
         env:
           TAG: ${{ needs.meta.outputs.tag }}
           GITHUB_TOKEN: ${{ github.token }}
-          MAVEN_REPO: ${{ vars.MAVEN_REPO || 'open-eid/cdoc2-shares-server' }}
 
   shares-server-manifest:
     needs: [ meta, shares-server ]

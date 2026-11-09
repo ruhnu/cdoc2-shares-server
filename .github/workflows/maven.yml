@@ -10,9 +10,9 @@ name: Build cdoc2-shares-server with CI
 
 on:
   push:
-    branches: [ "master", "ruhnu" ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ "master", "ruhnu" ]
+    branches: [ "master" ]
 
 env:
   ACTIONS_STEP_DEBUG: true
