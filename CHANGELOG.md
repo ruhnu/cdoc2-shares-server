@@ -18,6 +18,18 @@
   expiry time has passed, instead of serving it until the scheduled clean-up job deletes it.
   Authentication is still checked first, so the response is the same as for a deleted share.
 
+## [0.8.4]
+
+### Improvements
+* Fixed issue with certain configuration keys always binding to default values. The affected keys:
+  * `cdoc2.auth-x5c.revocation-checks-enabled`
+  * `cdoc2.auth-x5c.sign-cert-forbidden`
+  * `cdoc2.rp-server.rp-name`
+  * `cdoc2.rp-server.scheme-name`
+  * `key-share.default-expiration-duration`
+  * `key-share.max-expiration-duration`
+  * `cdoc2.nonce.expiration-seconds`
+
 ## [0.8.3]
 
 ### Improvements

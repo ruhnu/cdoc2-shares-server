@@ -107,11 +107,11 @@ trusted certificate issuers. `x-cdoc2-auth-x5c` trusted issuers are configured t
 # Certificate revocation URL is in certificate AIA extension using OCSP.
 # When certificate doesn't have AIA extension and revocation checks are enabled, then authentication
 # will fail
-cdoc2.auth-x5c.revocation-checks.enabled=false
+cdoc2.auth-x5c.revocation-checks-enabled=false
 # Forbid authentication to /key-shares API with sid/mid certificate for signing purpose.
 # Certificates are allowed with only digital authentication purpose, not with digital signature.
 # Default value is 'true'
-cdoc2.auth-x5c.sign-cert.forbidden=true
+cdoc2.auth-x5c.sign-cert-forbidden=true
 
 # https://docs.spring.io/spring-boot/reference/features/ssl.html#features.ssl.pem
 # Smart-ID/Mobile-ID certificate trusted issuer
@@ -131,7 +131,7 @@ script generates truststore for auth token issuers.
 `application.properties`:
 ```
 # nonce validity time in seconds, default 300
-cdoc2.nonce.expiration.seconds=300
+cdoc2.nonce.expiration-seconds=300
 
 # Expired share nonce removing job executes every 5 minutes every day
 key-share-nonce.expired.clean-up.cron=0 0/5 * * * ?

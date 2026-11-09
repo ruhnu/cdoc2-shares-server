@@ -110,9 +110,9 @@ services:
       - server.port=8442
       - management.server.port=18442
       # JVM debug
-    #      - BPL_DEBUG_ENABLED=true
-    #      - BPL_DEBUG_PORT=8100
-    #      - BPL_DEBUG_SUSPEND=false
+#      - BPL_DEBUG_ENABLED=true
+#      - BPL_DEBUG_PORT=8100
+#      - BPL_DEBUG_SUSPEND=false
     deploy:
       resources:
         limits:
