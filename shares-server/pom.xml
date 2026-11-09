@@ -600,6 +600,21 @@
 							<HTTP_PROXY>${http.proxy}</HTTP_PROXY>
 							<!--suppress UnresolvedMavenProperty -->
 							<HTTPS_PROXY>${https.proxy}</HTTPS_PROXY>
+							<!-- OCI image labels (Paketo image-labels buildpack), unset unless given with -D -->
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_TITLE>${bp.oci.title}</BP_OCI_TITLE>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_DESCRIPTION>${bp.oci.description}</BP_OCI_DESCRIPTION>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_VERSION>${bp.oci.version}</BP_OCI_VERSION>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_REVISION>${bp.oci.revision}</BP_OCI_REVISION>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_SOURCE>${bp.oci.source}</BP_OCI_SOURCE>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_CREATED>${bp.oci.created}</BP_OCI_CREATED>
+							<!--suppress UnresolvedMavenProperty -->
+							<BP_OCI_DOCUMENTATION>${bp.oci.documentation}</BP_OCI_DOCUMENTATION>
 						</env>
 						<!--suppress UnresolvedMavenProperty -->
 						<tags>${spring-boot.build-image.tags}</tags>

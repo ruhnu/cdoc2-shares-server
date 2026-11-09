@@ -15,6 +15,14 @@ env:
   REGISTRY: ghcr.io
   SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/ruhnu-shares-server
   LIQUIBASE_IMAGE: ghcr.io/${{ github.repository_owner }}/ruhnu-shares-server-liquibase
+  # OCI image labels. ghcr.io shows the description on the package page; for
+  # multi-arch images it reads it from the index annotations.
+  SERVER_DESCRIPTION: >-
+    Key shares server for Ruhnu: revocable, audited access to secrets in Git
+    using SSH keys. Fork of open-eid/cdoc2-shares-server.
+  LIQUIBASE_DESCRIPTION: Liquibase database migrations for ruhnu-shares-server.
+  OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+  OCI_DOCUMENTATION: https://github.com/ruhnu
 
 permissions:
   contents: read
@@ -26,6 +34,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       latest: ${{ steps.tag.outputs.latest }}
+      created: ${{ steps.tag.outputs.created }}
     steps:
       - id: tag
         env:
@@ -33,6 +42,8 @@ jobs:
         run: |
           # Docker tags allow only [A-Za-z0-9_.-]
           echo "tag=${REF_NAME//[^A-Za-z0-9_.-]/-}" >> "$GITHUB_OUTPUT"
+          # one build time for all images, ISO 8601 instant
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           if [[ "$REF_NAME" == v* ]]; then
             echo "latest=true" >> "$GITHUB_OUTPUT"
           else
@@ -104,9 +115,18 @@ jobs:
             -Dspring-boot.build-image.publish=true \
             -Ddocker.publishRegistry.url=${REGISTRY} \
             -Ddocker.publishRegistry.username=${{ github.actor }} \
-            -Ddocker.publishRegistry.password=${GITHUB_TOKEN}
+            -Ddocker.publishRegistry.password=${GITHUB_TOKEN} \
+            -Dspring-boot.build-image.createdDate=${CREATED} \
+            -Dbp.oci.title=ruhnu-shares-server \
+            "-Dbp.oci.description=${SERVER_DESCRIPTION}" \
+            -Dbp.oci.version=${TAG} \
+            -Dbp.oci.revision=${GITHUB_SHA} \
+            -Dbp.oci.source=${OCI_SOURCE} \
+            -Dbp.oci.created=${CREATED} \
+            -Dbp.oci.documentation=${OCI_DOCUMENTATION}
         env:
           TAG: ${{ needs.meta.outputs.tag }}
+          CREATED: ${{ needs.meta.outputs.created }}
           GITHUB_TOKEN: ${{ github.token }}
 
   shares-server-manifest:
@@ -123,10 +143,19 @@ jobs:
         env:
           TAG: ${{ needs.meta.outputs.tag }}
           LATEST: ${{ needs.meta.outputs.latest }}
+          CREATED: ${{ needs.meta.outputs.created }}
         run: |
           tags=(-t "${SERVER_IMAGE}:${TAG}")
           if [[ "$LATEST" == true ]]; then tags+=(-t "${SERVER_IMAGE}:latest"); fi
+          a=index:org.opencontainers.image
           docker buildx imagetools create "${tags[@]}" \
+            --annotation "${a}.title=ruhnu-shares-server" \
+            --annotation "${a}.description=${SERVER_DESCRIPTION}" \
+            --annotation "${a}.version=${TAG}" \
+            --annotation "${a}.revision=${GITHUB_SHA}" \
+            --annotation "${a}.source=${OCI_SOURCE}" \
+            --annotation "${a}.created=${CREATED}" \
+            --annotation "${a}.documentation=${OCI_DOCUMENTATION}" \
             "${SERVER_IMAGE}:${TAG}-amd64" \
             "${SERVER_IMAGE}:${TAG}-arm64"
 
@@ -166,3 +195,19 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=ruhnu-shares-server-liquibase
+            org.opencontainers.image.description=${{ env.LIQUIBASE_DESCRIPTION }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            org.opencontainers.image.created=${{ needs.meta.outputs.created }}
+            org.opencontainers.image.documentation=${{ env.OCI_DOCUMENTATION }}
+          annotations: |
+            index:org.opencontainers.image.title=ruhnu-shares-server-liquibase
+            index:org.opencontainers.image.description=${{ env.LIQUIBASE_DESCRIPTION }}
+            index:org.opencontainers.image.version=${{ needs.meta.outputs.tag }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            index:org.opencontainers.image.created=${{ needs.meta.outputs.created }}
+            index:org.opencontainers.image.documentation=${{ env.OCI_DOCUMENTATION }}
