@@ -179,7 +179,15 @@ and the relaxed API document. Both only widen what is accepted.
   codes of `etsi/` recipients are not written to the log.
 
 Access to a `ruhnu/pk/` share ends when it expires. To revoke earlier, delete the recipient's rows from
-`key_material_share` on at least one shares server.
+`key_material_share` on at least one shares server. Nonces in `key_material_share_nonce` reference their share
+(no cascade), so delete those first; otherwise the delete fails while a recent nonce exists:
+
+```sql
+-- :r is the recipient, ruhnu/pk/<base64 OpenSSH public key blob>
+delete from key_material_share_nonce
+ where share_id in (select share_id from key_material_share where recipient = :'r');
+delete from key_material_share where recipient = :'r';
+```
 
 ## Logging
 
