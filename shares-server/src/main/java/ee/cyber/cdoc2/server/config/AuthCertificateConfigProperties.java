@@ -1,6 +1,7 @@
 package ee.cyber.cdoc2.server.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 
 /**
@@ -9,10 +10,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "cdoc2.auth-x5c")
 public record AuthCertificateConfigProperties(
     boolean revocationChecksEnabled,
-    boolean signCertForbidden
+    @DefaultValue("true") boolean signCertForbidden
 ) {
-
-    public AuthCertificateConfigProperties() {
-        this(false, true);
-    }
 }
