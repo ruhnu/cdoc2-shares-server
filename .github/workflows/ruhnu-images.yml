@@ -139,6 +139,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Buildpacks push Docker v2 manifests, from which imagetools makes a
+      # Docker manifest list. That format has no annotations, so the index
+      # annotations below would be dropped silently. Convert to OCI first
+      # (skopeo is preinstalled on ubuntu-24.04 runners).
+      - name: Convert per-arch images to OCI
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          for arch in amd64 arm64; do
+            skopeo copy --format oci \
+              "docker://${SERVER_IMAGE}:${TAG}-${arch}" \
+              "docker://${SERVER_IMAGE}:${TAG}-${arch}"
+          done
+
       - name: Create multi-arch manifest
         env:
           TAG: ${{ needs.meta.outputs.tag }}
