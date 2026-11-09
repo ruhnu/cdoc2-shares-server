@@ -79,10 +79,14 @@ jobs:
           ref: ${{ steps.deps.outputs.CDOC2_AUTH_REF }}
           path: deps/cdoc2-auth
 
+      # Static analysis is skipped: it belongs to the siblings' own CI, and
+      # under deps/ Maven picks up this repo's .mvn and spotbugs-exclude.xml.
       - name: Build sibling dependencies
         run: |
-          mvn -B -f deps/cdoc2-openapi install -Dmaven.test.skip=true
-          mvn -B -f deps/cdoc2-auth install -Dmaven.test.skip=true
+          for d in deps/cdoc2-openapi deps/cdoc2-auth; do
+            mvn -B -f "$d" install -Dmaven.test.skip=true \
+              -Dspotbugs.skip=true -Dcheckstyle.skip=true
+          done
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
