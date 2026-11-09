@@ -362,18 +362,18 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
             ? new RuhnuConfigProperties(true, RuhnuConfigProperties.disabled().pk())
             : RuhnuConfigProperties.disabled();
         return new KeyShareApiService(
-            new AuthCertificateConfigProperties(),
-            new KeyShareExpiryConfigProperties(),
+            new AuthCertificateConfigProperties(false, true),
+            new KeyShareExpiryConfigProperties("P1095D", "P1825D"),
             mockNativeWebRequest,
             mockShareRep,
             mockNonceRep,
             mockValidateSessionToken,
             new ValidateAuthToken(
                 trustedIssuers,
-                new AuthCertificateConfigProperties(),
-                new RpServerConfigProperties(),
+                new AuthCertificateConfigProperties(false, true),
+                new RpServerConfigProperties("DEMO", "smart-id-demo"),
                 mockNonceRep,
-                new NonceConfigProperties(),
+                new NonceConfigProperties(300L),
                 rpServerJwkConf
             ),
             Clock.systemUTC(),
