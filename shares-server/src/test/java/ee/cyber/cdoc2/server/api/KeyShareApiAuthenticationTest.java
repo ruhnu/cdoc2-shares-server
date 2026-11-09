@@ -150,18 +150,18 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
     @BeforeEach
     public void setUp() throws IOException {
         keyShareApiService = new KeyShareApiService(
-            new AuthCertificateConfigProperties(),
-            new KeyShareExpiryConfigProperties(),
+            new AuthCertificateConfigProperties(false, true),
+            new KeyShareExpiryConfigProperties("P1095D", "P1825D"),
             mockNativeWebRequest,
             mockShareRep,
             mockNonceRep,
             mockValidateSessionToken,
             new ValidateAuthToken(
                 trustedIssuers,
-                new AuthCertificateConfigProperties(),
-                new RpServerConfigProperties(),
+                new AuthCertificateConfigProperties(false, true),
+                new RpServerConfigProperties("DEMO", "smart-id-demo"),
                 mockNonceRep,
-                new NonceConfigProperties(),
+                new NonceConfigProperties(300L),
                 rpServerJwkConf
             ),
             Clock.systemUTC()
