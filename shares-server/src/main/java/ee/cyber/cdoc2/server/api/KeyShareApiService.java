@@ -36,16 +36,20 @@ import org.springframework.web.context.request.NativeWebRequest;
 
 import com.nimbusds.jose.util.X509CertUtils;
 
+import ee.cyber.cdoc2.auth.DidRecipientId;
 import ee.cyber.cdoc2.auth.SshPublicKeyParser;
 import ee.cyber.cdoc2.auth.TokenVerificationResponse;
+import ee.cyber.cdoc2.auth.exception.InvalidDidRecipientException;
 import ee.cyber.cdoc2.auth.exception.InvalidSshPublicKeyException;
 import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.Constants;
+import ee.cyber.cdoc2.server.RuhnuRecipientKind;
 import ee.cyber.cdoc2.server.ValidateAuthToken;
 import ee.cyber.cdoc2.server.ValidateSessionToken;
 import ee.cyber.cdoc2.server.config.AuthCertificateConfigProperties;
 import ee.cyber.cdoc2.server.config.KeyShareExpiryConfigProperties;
 import ee.cyber.cdoc2.server.config.RuhnuConfigProperties;
+import ee.cyber.cdoc2.server.did.DidKeyCheck;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApi;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApiController;
 import ee.cyber.cdoc2.server.generated.api.KeySharesApiDelegate;
@@ -83,6 +87,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     private final ValidateAuthToken validateAuthToken;
     private final Clock clock;
     private final RuhnuConfigProperties ruhnuConfig;
+    private final DidKeyCheck didKeyCheck;
 
     /**
      * Create service with ruhnu fork features disabled (upstream behaviour)
@@ -102,7 +107,9 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             validateSessionToken, validateAuthToken, clock, RuhnuConfigProperties.disabled());
     }
 
-    @Autowired
+    /**
+     * Create service without DID resolution: "ruhnu/did/" shares are refused, as no DID host is allowed
+     */
     @SuppressWarnings("checkstyle:ParameterNumber")
     public KeyShareApiService(
         AuthCertificateConfigProperties certificateConfig,
@@ -115,6 +122,24 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         Clock clock,
         RuhnuConfigProperties ruhnuConfig
     ) {
+        this(certificateConfig, keyShareExpiryConfig, nativeWebRequest, keyShareRepository, shareNonceRepository,
+            validateSessionToken, validateAuthToken, clock, ruhnuConfig, DidKeyCheck.disabled());
+    }
+
+    @Autowired
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public KeyShareApiService(
+        AuthCertificateConfigProperties certificateConfig,
+        KeyShareExpiryConfigProperties keyShareExpiryConfig,
+        NativeWebRequest nativeWebRequest,
+        KeyShareRepository keyShareRepository,
+        KeyShareNonceRepository shareNonceRepository,
+        ValidateSessionToken validateSessionToken,
+        ValidateAuthToken validateAuthToken,
+        Clock clock,
+        RuhnuConfigProperties ruhnuConfig,
+        DidKeyCheck didKeyCheck
+    ) {
         this.certificateConfig = certificateConfig;
         this.keyShareExpiryConfig = keyShareExpiryConfig;
         this.nativeWebRequest = nativeWebRequest;
@@ -124,6 +149,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         this.validateAuthToken = validateAuthToken;
         this.clock = clock;
         this.ruhnuConfig = ruhnuConfig;
+        this.didKeyCheck = didKeyCheck;
     }
 
     @Override
@@ -146,13 +172,8 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
         }
 
-        if (ruhnuConfig.enabled() && isSshPkRecipient(keyShare.getRecipient())) {
-            try {
-                SshPublicKeyParser.validateRecipientId(keyShare.getRecipient());
-            } catch (InvalidSshPublicKeyException e) {
-                log.warn("Invalid SSH public key recipient: {}", e.getMessage());
-                return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-            }
+        if (ruhnuConfig.enabled() && !isValidRuhnuRecipient(keyShare.getRecipient())) {
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
         }
 
         ExpiryTimeData expiryTimeData = getExpiryTime(keyShare.getRecipient(), xExpiryTime);
@@ -200,7 +221,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         );
 
         if (xSessionToken == null && xSessionCert == null && ruhnuConfig.enabled()) {
-            return createAndSaveSshPkNonce(shareId);
+            return createAndSaveRuhnuNonce(shareId);
         }
 
         // upstream API document makes both headers mandatory
@@ -236,10 +257,10 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     }
 
     /**
-     * Nonce for "ruhnu/pk/" SSH public key recipient share, no session token required. Possession of the key
-     * is proven later by the auth token signature.
+     * Nonce for "ruhnu/pk/" SSH public key and "ruhnu/did/" DID recipient shares, no session token required.
+     * Possession of the key is proven later by the auth token signature. The DID is not resolved here.
      */
-    private ResponseEntity<NonceResponse> createAndSaveSshPkNonce(String shareId) {
+    private ResponseEntity<NonceResponse> createAndSaveRuhnuNonce(String shareId) {
         Optional<KeyShareDb> keyShareOptional = findUnexpiredShare(shareId);
         if (keyShareOptional.isEmpty()) {
             log.warn("Key share with shareId {} not found", shareId);
@@ -247,7 +268,7 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         }
 
         KeyShareDb keyShare = keyShareOptional.get();
-        if (!isSshPkRecipient(keyShare.getRecipient())) {
+        if (RuhnuRecipientKind.of(keyShare.getRecipient()) == RuhnuRecipientKind.NONE) {
             log.warn("x-cdoc2-session-token or x-cdoc2-session-x5c header missing");
             return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
         }
@@ -287,8 +308,14 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         String signatureInput,
         String signature
     ) {
-        if (ruhnuConfig.enabled() && ValidateAuthToken.isSshPkToken(xAuthToken)) {
-            return getSshPkKeyShare(shareId, xAuthToken);
+        if (ruhnuConfig.enabled()) {
+            RuhnuRecipientKind tokenKind = ValidateAuthToken.ruhnuTokenKind(xAuthToken);
+            if (tokenKind == RuhnuRecipientKind.PK) {
+                return getSshPkKeyShare(shareId, xAuthToken);
+            }
+            if (tokenKind == RuhnuRecipientKind.DID) {
+                return getDidKeyShare(shareId, xAuthToken);
+            }
         }
 
         // upstream API document makes these headers mandatory
@@ -400,6 +427,49 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         return releaseShare(shareDb);
     }
 
+    /**
+     * Get share for auth token of a "ruhnu/did/" DID recipient. Verify the token without network access (key in
+     * the "jwk" header matches the fingerprint in "iss", signature, "aud" and nonce), look up the share, compare the
+     * verified identity with the share recipient, and only then resolve the DID and check that its document still
+     * lists the key. An unavailable DID host gives 503, every other refusal 404.
+     */
+    private ResponseEntity<KeyShare> getDidKeyShare(String shareId, String xAuthToken) {
+        String tokenRecipient;
+        try {
+            tokenRecipient = validateAuthToken.executeDid(
+                shareId,
+                xAuthToken,
+                extractRequestURL(this.nativeWebRequest)
+            ).identifier();
+        } catch (VerificationException | MalformedURLException ex) {
+            logAuthValidationFailure(ex);
+            return new ResponseEntity<>(HttpStatus.UNAUTHORIZED);
+        }
+
+        Optional<KeyShareDb> shareDbOpt = findUnexpiredShare(shareId);
+        if (shareDbOpt.isEmpty()) {
+            log.warn("Key share with shareId {} not found", shareId);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        KeyShareDb shareDb = shareDbOpt.get();
+        if (!tokenRecipient.equals(shareDb.getRecipient())) {
+            log.warn("Key share with shareId {} doesn't match token issuer", shareId);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        DidKeyCheck.Outcome outcome = didKeyCheck.check(DidRecipientId.parse(tokenRecipient));
+        if (outcome == DidKeyCheck.Outcome.UNAVAILABLE) {
+            return new ResponseEntity<>(HttpStatus.SERVICE_UNAVAILABLE);
+        }
+        if (outcome != DidKeyCheck.Outcome.LISTED) {
+            log.warn("Key share with shareId {} refused: DID check {}", shareId, outcome);
+            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        }
+
+        return releaseShare(shareDb);
+    }
+
     private ResponseEntity<KeyShare> releaseShare(KeyShareDb shareDb) {
         if (ruhnuConfig.enabled()) {
             AUDIT_LOG.info("Key share released: shareId={}, recipient={}, time={}",
@@ -415,22 +485,53 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     }
 
     /**
-     * Recipient for the audit log: "ruhnu/pk:SHA256:..." OpenSSH fingerprint for SSH public key recipients.
-     * Other recipients (etsi/ personal identification codes) are not logged, as in upstream logging.
+     * Recipient for the audit log: "ruhnu/pk:SHA256:..." OpenSSH fingerprint for SSH public key recipients, the
+     * full "ruhnu/did/&lt;did&gt;/hash/&lt;fingerprint&gt;" identifier for DID recipients. Other recipients (etsi/
+     * personal identification codes) are not logged, as in upstream logging.
      */
     private static String auditRecipient(String recipient) {
-        if (isSshPkRecipient(recipient)) {
+        RuhnuRecipientKind kind = RuhnuRecipientKind.of(recipient);
+        if (kind == RuhnuRecipientKind.PK) {
             try {
                 return "ruhnu/pk:" + SshPublicKeyParser.fingerprintFromRecipientId(recipient);
             } catch (InvalidSshPublicKeyException e) {
                 return "ruhnu/pk:invalid";
             }
         }
+        if (kind == RuhnuRecipientKind.DID) {
+            return recipient;
+        }
         return "redacted";
     }
 
-    private static boolean isSshPkRecipient(String recipient) {
-        return recipient != null && recipient.startsWith(SshPublicKeyParser.RECIPIENT_ID_PREFIX);
+    /**
+     * Validate a recipient of a new share while ruhnu features are enabled: "ruhnu/pk/" must be a canonical P-256
+     * key, "ruhnu/did/" a valid DID recipient identifier whose DID host is allowed. Other recipients are not
+     * checked here.
+     */
+    private boolean isValidRuhnuRecipient(String recipient) {
+        RuhnuRecipientKind kind = RuhnuRecipientKind.of(recipient);
+        if (kind == RuhnuRecipientKind.PK) {
+            try {
+                SshPublicKeyParser.validateRecipientId(recipient);
+            } catch (InvalidSshPublicKeyException e) {
+                log.warn("Invalid SSH public key recipient: {}", e.getMessage());
+                return false;
+            }
+        } else if (kind == RuhnuRecipientKind.DID) {
+            DidRecipientId didRecipient;
+            try {
+                didRecipient = DidRecipientId.parse(recipient);
+            } catch (InvalidDidRecipientException e) {
+                log.warn("Invalid DID recipient: {}", e.getMessage());
+                return false;
+            }
+            if (!didKeyCheck.isAllowed(didRecipient)) {
+                log.warn("DID host of {} is not in cdoc2.ruhnu.did.allowed-hosts", didRecipient.did());
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -454,7 +555,8 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     private ExpiryTimeData getExpiryTime(String recipient, LocalDateTime xExpiryTime) {
         Duration maxDuration;
         Duration defaultDuration;
-        if (ruhnuConfig.enabled() && isSshPkRecipient(recipient)) {
+        // "ruhnu/did/" shares keep the global lifetimes: their access can be revoked through the DID document
+        if (ruhnuConfig.enabled() && RuhnuRecipientKind.of(recipient) == RuhnuRecipientKind.PK) {
             maxDuration = ruhnuConfig.pk().maxExpirationDuration();
             defaultDuration = ruhnuConfig.pk().defaultExpirationDuration();
         } else {

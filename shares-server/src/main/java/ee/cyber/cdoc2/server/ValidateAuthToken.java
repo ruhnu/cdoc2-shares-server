@@ -19,11 +19,11 @@ import com.authlete.sd.SDJWT;
 import com.nimbusds.jwt.SignedJWT;
 
 import ee.cyber.cdoc2.auth.AuthTokenVerifier;
+import ee.cyber.cdoc2.auth.DidAuthTokenVerifier;
 import ee.cyber.cdoc2.auth.RpHttpSignatureVerifier;
 import ee.cyber.cdoc2.auth.ShareAccessData;
 import ee.cyber.cdoc2.auth.SshPkAuthTokenVerifier;
 import ee.cyber.cdoc2.auth.SshPkTokenVerificationResponse;
-import ee.cyber.cdoc2.auth.SshPublicKeyParser;
 import ee.cyber.cdoc2.auth.TokenVerificationResponse;
 import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.config.AuthCertificateConfigProperties;
@@ -137,8 +137,34 @@ public class ValidateAuthToken {
         String xAuthToken,
         URL requestUrl
     ) throws VerificationException {
-        SshPkTokenVerificationResponse verificationResponse = new SshPkAuthTokenVerifier().verify(xAuthToken);
+        return checkAudience(shareId, new SshPkAuthTokenVerifier().verify(xAuthToken), requestUrl);
+    }
 
+    /**
+     * Verifies auth token of a DID recipient ("ruhnu/did/" "iss"): the key in the JWS "jwk" header must match the
+     * fingerprint in "iss" and verify the signature, then the same "aud" checks (server URL, shareId, nonce) as
+     * {@link #execute}. Does not contact the DID host. Caller must check that the returned identifier equals the
+     * share recipient, and then that the DID document still lists the key.
+     *
+     * @param shareId    requested shareId (will be compared to shareId in xAuthToken)
+     * @param xAuthToken SD-JWT auth token that was generated for requested <code>shareId</code>
+     * @param requestUrl URL of the endpoint receiving the request for a key share
+     * @return verified "ruhnu/did/" identifier and nonce URI
+     * @throws VerificationException verification exception with message
+     */
+    public SshPkTokenVerificationResponse executeDid(
+        String shareId,
+        String xAuthToken,
+        URL requestUrl
+    ) throws VerificationException {
+        return checkAudience(shareId, new DidAuthTokenVerifier().verify(xAuthToken), requestUrl);
+    }
+
+    private SshPkTokenVerificationResponse checkAudience(
+        String shareId,
+        SshPkTokenVerificationResponse verificationResponse,
+        URL requestUrl
+    ) throws VerificationException {
         ShareAccessData shareAccessData;
         try {
             shareAccessData = ShareAccessData.fromURL(verificationResponse.nonceUri().toURL());
@@ -152,24 +178,24 @@ public class ValidateAuthToken {
     }
 
     /**
-     * Unverified check whether auth token "iss" is an SSH public key identifier ("ruhnu/pk/"). Used only to
-     * choose the verification path; the security decision is the comparison of the verified identity with the
-     * share recipient.
+     * Unverified read of the auth token "iss" kind: "ruhnu/pk/", "ruhnu/did/" or neither. Used only to choose the
+     * verification path; the security decision is the comparison of the verified identity with the share
+     * recipient.
      *
      * @param xAuthToken SD-JWT auth token
-     * @return true if token parses and its "iss" starts with "ruhnu/pk/"
+     * @return kind of the token "iss"; {@link RuhnuRecipientKind#NONE} if the token does not parse
      */
-    public static boolean isSshPkToken(String xAuthToken) {
+    public static RuhnuRecipientKind ruhnuTokenKind(String xAuthToken) {
         if (xAuthToken == null || xAuthToken.isEmpty()) {
-            return false;
+            return RuhnuRecipientKind.NONE;
         }
         try {
             String iss = SignedJWT.parse(SDJWT.parse(xAuthToken).getCredentialJwt())
                 .getJWTClaimsSet()
                 .getIssuer();
-            return iss != null && iss.startsWith(SshPublicKeyParser.RECIPIENT_ID_PREFIX);
+            return RuhnuRecipientKind.of(iss);
         } catch (ParseException | RuntimeException e) {
-            return false;
+            return RuhnuRecipientKind.NONE;
         }
     }
 

@@ -100,6 +100,15 @@ class RuhnuSshPkApiTests extends RuhnuApiTestBase {
     }
 
     @Test
+    void shouldRefuseDidRecipientWhenNoHostsConfigured() throws Exception {
+        // this class configures no cdoc2.ruhnu.did.allowed-hosts
+        String didRecipient = DidTestData.didRecipientId("did:web:example.org:p:alice", key);
+
+        assertEquals(400, createShare(didRecipient, null).statusCode());
+        assertEquals(0, shareRepository.count());
+    }
+
+    @Test
     void shouldStillRejectTooLongRecipient() throws Exception {
         assertEquals(400, createShare("ruhnu/pk/" + "A".repeat(247), null).statusCode());
         assertEquals(0, shareRepository.count());
