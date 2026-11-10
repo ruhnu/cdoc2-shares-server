@@ -28,7 +28,7 @@
         <spotbugs-annotations.version>4.10.3</spotbugs-annotations.version>
 
         <!--info.version from cdoc2-openapi/cdoc2-key-shares-openapi.yaml -->
-        <cdoc2-key-shares-openapi.version>1.4.0-draft</cdoc2-key-shares-openapi.version>
+        <cdoc2-key-shares-openapi.version>1.5.0-draft</cdoc2-key-shares-openapi.version>
 
     </properties>
 
