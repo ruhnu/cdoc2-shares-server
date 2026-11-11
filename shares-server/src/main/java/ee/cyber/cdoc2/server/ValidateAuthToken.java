@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.text.ParseException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Objects;
@@ -14,9 +15,15 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.authlete.sd.SDJWT;
+import com.nimbusds.jwt.SignedJWT;
+
 import ee.cyber.cdoc2.auth.AuthTokenVerifier;
 import ee.cyber.cdoc2.auth.RpHttpSignatureVerifier;
 import ee.cyber.cdoc2.auth.ShareAccessData;
+import ee.cyber.cdoc2.auth.SshPkAuthTokenVerifier;
+import ee.cyber.cdoc2.auth.SshPkTokenVerificationResponse;
+import ee.cyber.cdoc2.auth.SshPublicKeyParser;
 import ee.cyber.cdoc2.auth.TokenVerificationResponse;
 import ee.cyber.cdoc2.auth.exception.VerificationException;
 import ee.cyber.cdoc2.server.config.AuthCertificateConfigProperties;
@@ -112,6 +119,61 @@ public class ValidateAuthToken {
         checkTokenAudience(shareId, shareAccessData, requestUrl);
 
         return verificationResponse;
+    }
+
+    /**
+     * Verifies auth token signed by an SSH public key recipient ("ruhnu/pk/" "iss"): JWS signature with the key
+     * from "iss", then the same "aud" checks (server URL, shareId, nonce) as {@link #execute}. Caller must
+     * check that the returned identifier equals the share recipient.
+     *
+     * @param shareId    requested shareId (will be compared to shareId in xAuthToken)
+     * @param xAuthToken SD-JWT auth token that was generated for requested <code>shareId</code>
+     * @param requestUrl URL of the endpoint receiving the request for a key share
+     * @return verified "ruhnu/pk/" identifier and nonce URI
+     * @throws VerificationException verification exception with message
+     */
+    public SshPkTokenVerificationResponse executeSshPk(
+        String shareId,
+        String xAuthToken,
+        URL requestUrl
+    ) throws VerificationException {
+        SshPkTokenVerificationResponse verificationResponse = new SshPkAuthTokenVerifier().verify(xAuthToken);
+
+        // Anyone can sign a token with a self-generated key, so "aud" is untrusted input here:
+        // whatever fails to parse must end as VerificationException (401), not as a runtime exception (500)
+        ShareAccessData shareAccessData;
+        try {
+            shareAccessData = ShareAccessData.fromURL(verificationResponse.nonceUri().toURL());
+            Base64.getUrlDecoder().decode(shareAccessData.getNonce());
+        } catch (MalformedURLException | RuntimeException e) {
+            throw new VerificationException("Unable to parse nonce URI: " + verificationResponse.nonceUri());
+        }
+
+        checkTokenAudience(shareId, shareAccessData, requestUrl);
+
+        return verificationResponse;
+    }
+
+    /**
+     * Unverified check whether auth token "iss" is an SSH public key identifier ("ruhnu/pk/"). Used only to
+     * choose the verification path; the security decision is the comparison of the verified identity with the
+     * share recipient.
+     *
+     * @param xAuthToken SD-JWT auth token
+     * @return true if token parses and its "iss" starts with "ruhnu/pk/"
+     */
+    public static boolean isSshPkToken(String xAuthToken) {
+        if (xAuthToken == null || xAuthToken.isEmpty()) {
+            return false;
+        }
+        try {
+            String iss = SignedJWT.parse(SDJWT.parse(xAuthToken).getCredentialJwt())
+                .getJWTClaimsSet()
+                .getIssuer();
+            return iss != null && iss.startsWith(SshPublicKeyParser.RECIPIENT_ID_PREFIX);
+        } catch (ParseException | RuntimeException e) {
+            return false;
+        }
     }
 
     private RpHttpSignatureVerifier.RpHttpSignatureParams createParamsForHttpSignatureVerification(

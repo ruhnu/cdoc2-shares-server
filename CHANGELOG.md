@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Features
+* SSH public key recipients (`ruhnu/pk/<base64 OpenSSH public key blob>`, ECDSA P-256) behind feature
+  flag `cdoc2.ruhnu.enabled` (default `false`, upstream behaviour). With the flag on: nonce without
+  session token for `ruhnu/pk/` shares, auth tokens verified with the public key in `iss`, per
+  recipient type expiry (`cdoc2.ruhnu.pk.*`, default 14 days, the default never exceeds the maximum)
+  and a share release audit log.
+  See admin-guide.md.
+* `key_material_share.recipient` widened to 255 characters; key-shares API 1.4.0-draft makes the
+  session and auth certificate headers optional in the API document, the server still requires them
+  for Smart-ID/Mobile-ID requests.
+
 ### Bug fixes
 * Expired key shares are no longer served. The nonce (`POST /key-shares/{shareId}/nonce`) and
   get-share (`GET /key-shares/{shareId}`) endpoints now respond 404 Not Found as soon as a share's

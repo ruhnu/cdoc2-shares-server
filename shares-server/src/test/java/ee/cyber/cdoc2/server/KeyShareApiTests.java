@@ -35,6 +35,7 @@ import ee.cyber.cdoc2.client.model.NonceResponse;
 import ee.cyber.cdoc2.server.api.KeyShareApiService;
 import ee.cyber.cdoc2.server.config.KeyShareExpiryConfigProperties;
 import ee.cyber.cdoc2.server.config.MonitoringConfigProperties;
+import ee.cyber.cdoc2.server.config.RuhnuConfigProperties;
 import ee.cyber.cdoc2.server.model.entity.KeyShareDb;
 import ee.cyber.cdoc2.server.model.entity.SessionNonceDb;
 
@@ -88,6 +89,9 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
 
     @Autowired
     private KeyShareExpiryConfigProperties keyShareExpiryConfig;
+
+    @Autowired
+    private RuhnuConfigProperties ruhnuConfig;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -316,8 +320,12 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
 
     @Test
     void shouldFailToCreateKeyShareWithTooLongRecipient() {
+        // upstream limit is 32 characters; with cdoc2.ruhnu.enabled recipients up to 255 characters are allowed
+        String tooLong = ruhnuConfig.enabled()
+            ? "Too_long_recipient_" + "x".repeat(255)
+            : "Tooooooooooooooooooooooooooo_looooooooooooooooooooooooong_recipient";
         var keyShare = new ee.cyber.cdoc2.client.model.KeyShare()
-            .recipient("Tooooooooooooooooooooooooooo_looooooooooooooooooooooooong_recipient")
+            .recipient(tooLong)
             .share(SHARE);
 
         assertThrowsBadRequest(keyShare);
