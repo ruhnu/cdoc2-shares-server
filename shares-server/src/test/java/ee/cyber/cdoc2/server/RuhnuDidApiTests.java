@@ -16,6 +16,8 @@ import com.github.tomakehurst.wiremock.stubbing.Scenario;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
@@ -346,14 +348,40 @@ class RuhnuDidApiTests extends RuhnuApiTestBase {
 
     @Test
     void shouldReturn404WhenHostRemovedFromList() throws Exception {
-        // stored while its host was allowed; the host is not in the list now
-        String removedHostDid = "did:web:localhost%3A" + (DID_HOST.httpsPort() + 1) + ":p:alice";
-        String removedHostRecipient = DidTestData.didRecipientId(removedHostDid, alice);
-        String shareId = saveShare(removedHostRecipient, EXPIRY_TIME);
-        String token = DidTestData.createDidAuthToken(removedHostRecipient, alice.keyPair(), publicKey(alice),
-            baseUrl, shareId, nonceFor(shareId));
+        // a reachable DID host that serves a valid document, but is not in cdoc2.ruhnu.did.allowed-hosts
+        // (any more): the share was stored while it was allowed
+        WireMockServer removedHost = DidTestData.startDidHost();
+        try {
+            String removedHostDid = "did:web:localhost%3A" + removedHost.httpsPort() + ":p:alice-" + testId;
+            removedHost.stubFor(get(urlEqualTo(docPath))
+                .willReturn(okJson(DidTestData.didDocument(removedHostDid, alice))));
+            String removedHostRecipient = DidTestData.didRecipientId(removedHostDid, alice);
+            String shareId = saveShare(removedHostRecipient, EXPIRY_TIME);
+            String token = DidTestData.createDidAuthToken(removedHostRecipient, alice.keyPair(), publicKey(alice),
+                baseUrl, shareId, nonceFor(shareId));
 
-        assertRefused(404, getShare(shareId, token));
+            assertRefused(404, getShare(shareId, token));
+            removedHost.verify(0, anyRequestedFor(anyUrl()));
+        } finally {
+            removedHost.stop();
+        }
+    }
+
+    // the nonce is appended to the "aud" URL as is: "...?nonce=" + nonce
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "!!!",          // not base64url
+        "x&=",          // parameter without a name
+        "a&nonce=b",    // duplicate parameter
+        "%%%"           // invalid percent-encoding
+    })
+    void shouldReturn401ForMalformedAudience(String nonce) throws Exception {
+        serveDidDocument(DidTestData.didDocument(did, alice));
+        String shareId = saveShare(recipient, EXPIRY_TIME);
+        String token = DidTestData.createDidAuthToken(recipient, alice.keyPair(), publicKey(alice), baseUrl,
+            shareId, nonce);
+
+        assertRefused(401, getShare(shareId, token));
         assertNoDidRequest();
     }
 
