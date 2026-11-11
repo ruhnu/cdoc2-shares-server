@@ -139,10 +139,13 @@ public class ValidateAuthToken {
     ) throws VerificationException {
         SshPkTokenVerificationResponse verificationResponse = new SshPkAuthTokenVerifier().verify(xAuthToken);
 
+        // Anyone can sign a token with a self-generated key, so "aud" is untrusted input here:
+        // whatever fails to parse must end as VerificationException (401), not as a runtime exception (500)
         ShareAccessData shareAccessData;
         try {
             shareAccessData = ShareAccessData.fromURL(verificationResponse.nonceUri().toURL());
-        } catch (MalformedURLException | IllegalArgumentException e) {
+            Base64.getUrlDecoder().decode(shareAccessData.getNonce());
+        } catch (MalformedURLException | RuntimeException e) {
             throw new VerificationException("Unable to parse nonce URI: " + verificationResponse.nonceUri());
         }
 
