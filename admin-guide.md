@@ -171,7 +171,9 @@ and the relaxed API document. Both only widen what is accepted.
   are needed. The audience, shareId and nonce checks are the same as for Smart-ID/Mobile-ID, and the share is
   released only if `iss` equals the share recipient. Other tokens take the Smart-ID/Mobile-ID path unchanged.
 - `ruhnu/pk/` shares get the `cdoc2.ruhnu.pk.*` lifetimes. A client may request a shorter one with
-  `x-expiry-time`; a longer one is cut to the maximum. Other recipients keep `key-share.*-expiration-duration`.
+  `x-expiry-time`; a longer one is cut to the maximum. If the default is
+  configured longer than the maximum, the maximum is used as the default and the server logs a warning at
+  startup. Other recipients keep `key-share.*-expiration-duration`.
 - Every successful share release, for all recipient types, is logged at `INFO` to logger
   `ee.cyber.cdoc2.server.audit`: `Key share released: shareId=..., recipient=..., time=...`.
   For `ruhnu/pk/` recipients `recipient` is the key's OpenSSH fingerprint (`ruhnu/pk:SHA256:...`, as shown

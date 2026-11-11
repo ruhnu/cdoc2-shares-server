@@ -2,6 +2,8 @@ package ee.cyber.cdoc2.server.config;
 
 import java.time.Duration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -20,10 +22,21 @@ public record RuhnuConfigProperties(
     @DefaultValue Pk pk
 ) {
 
+    private static final Logger log = LoggerFactory.getLogger(RuhnuConfigProperties.class);
+
+    public RuhnuConfigProperties {
+        if (enabled && pk.defaultExpirationDuration().compareTo(pk.maxExpirationDuration()) > 0) {
+            log.warn("cdoc2.ruhnu.pk.default-expiration-duration ({}) is longer than "
+                + "cdoc2.ruhnu.pk.max-expiration-duration ({}), the maximum is used as the default",
+                pk.defaultExpirationDuration(), pk.maxExpirationDuration());
+        }
+    }
+
     /**
      * Expiry for "ruhnu/pk/" recipient shares, {@link Duration#parse} format
      *
-     * @param defaultExpirationDuration expiry used when client does not request one
+     * @param defaultExpirationDuration expiry used when client does not request one. If longer than
+     *                                  the maximum, the maximum is used instead
      * @param maxExpirationDuration     longer requested expiry is cut to this
      */
     public record Pk(

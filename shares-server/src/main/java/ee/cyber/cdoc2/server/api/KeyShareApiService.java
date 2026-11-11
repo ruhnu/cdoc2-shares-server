@@ -457,6 +457,9 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         if (ruhnuConfig.enabled() && isSshPkRecipient(recipient)) {
             maxDuration = ruhnuConfig.pk().maxExpirationDuration();
             defaultDuration = ruhnuConfig.pk().defaultExpirationDuration();
+            if (defaultDuration.compareTo(maxDuration) > 0) {
+                defaultDuration = maxDuration;
+            }
         } else {
             maxDuration = Duration.parse(keyShareExpiryConfig.maxExpirationDuration());
             defaultDuration = Duration.parse(keyShareExpiryConfig.defaultExpirationDuration());
