@@ -34,6 +34,8 @@ import static org.junit.jupiter.api.Assertions.*;
 @ExtendWith(SpringExtension.class)
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    // start through main(), so that tests get its default properties (spring.jpa.open-in-view=false)
+    useMainMethod = SpringBootTest.UseMainMethod.ALWAYS,
     properties = {"management.server.port=0"}
 )
 @ContextConfiguration(initializers = BaseInitializationTest.Initializer.class)

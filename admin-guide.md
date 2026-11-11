@@ -222,6 +222,12 @@ following redirects. TLS is validated against the JVM's default trusted CAs; a D
 needs it in the JVM trust store (`-Djavax.net.ssl.trustStore=...`). Standard proxy settings
 (`https.proxyHost`, `http.nonProxyHosts`) apply. Documents larger than 64 KiB are refused.
 
+**Database connections.** The server sets `spring.jpa.open-in-view=false` by default, so that a share
+download does not hold a database connection while it waits for the DID host (up to
+`cdoc2.ruhnu.did.request-timeout`). Do not set it to `true`: slow DID hosts or replayed requests could then
+take every connection of the pool (`spring.datasource.hikari.maximum-pool-size`, default 10) and stall all
+endpoints.
+
 **The allowlist is required against SSRF.** `POST /key-shares` needs no authentication, so without an
 allowlist anyone could make the server fetch URLs of their choice. It is checked when a share is created
 (`400` for a host not in the list) and again before every fetch (`404`), so removing a host takes effect for
