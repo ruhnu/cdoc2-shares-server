@@ -67,6 +67,31 @@ class RuhnuDidConfigTests {
         }
     }
 
+    @Test
+    void allowlistWildcardShouldMatchExactlyOneLabel() {
+        DidHostAllowlist allowlist = new DidHostAllowlist(List.of("*.github.io", "*.Example.org:8443"));
+
+        assertTrue(allowlist.allows("alice.github.io", 443));
+        assertTrue(allowlist.allows("Alice.GitHub.io", 443));
+        assertFalse(allowlist.allows("github.io", 443));
+        assertFalse(allowlist.allows("a.b.github.io", 443));
+        assertFalse(allowlist.allows("alicegithub.io", 443));
+        assertFalse(allowlist.allows(".github.io", 443));
+        assertFalse(allowlist.allows("alice.github.io", 8443));
+
+        assertTrue(allowlist.allows("did.example.org", 8443));
+        assertFalse(allowlist.allows("did.example.org", 443));
+        assertFalse(allowlist.isEmpty());
+    }
+
+    @Test
+    void allowlistShouldRejectMalformedWildcards() {
+        for (String entry : List.of("*", "*.", "*.org", "*.org:443", "a.*.org", "*.*.example.org",
+            "**.example.org", "*example.org", "*..example.org", "*.example..org", "*.example.org.")) {
+            assertThrows(IllegalArgumentException.class, () -> new DidHostAllowlist(List.of(entry)), entry);
+        }
+    }
+
     private static RuhnuConfigProperties bind(Map<String, String> properties) {
         return new Binder(new MapConfigurationPropertySource(properties))
             .bind("cdoc2.ruhnu", RuhnuConfigProperties.class)

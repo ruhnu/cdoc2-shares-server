@@ -207,7 +207,8 @@ DID recipients work only while `cdoc2.ruhnu.enabled=true` and only for DID hosts
 `application.properties`:
 ```
 # DID hosts this server stores DID recipient shares for and fetches DID documents from.
-# Comma separated, each "host" or "host:port" (port 443 when omitted). Default empty: no DID recipients.
+# Comma separated, each "host" or "host:port" (port 443 when omitted). A host may be a wildcard
+# "*.domain", which matches exactly one more DNS label (see below). Default empty: no DID recipients.
 cdoc2.ruhnu.did.allowed-hosts=did.example.org
 # Timeouts for fetching a DID document: connect, and overall deadline for connect, headers and body.
 # Keep the deadline below the clients' read timeout (cdoc2-cli default 5 s), so that a hanging DID host
@@ -232,6 +233,15 @@ endpoints.
 allowlist anyone could make the server fetch URLs of their choice. It is checked when a share is created
 (`400` for a host not in the list) and again before every fetch (`404`), so removing a host takes effect for
 existing shares. IP addresses are never accepted as DID hosts.
+
+**Wildcard entries.** `*.github.io` lets anyone with a GitHub Pages site host their own DID document
+(`did:web:alice.github.io`) without a configuration change. As in TLS certificates, a wildcard matches exactly
+one DNS label: `*.github.io` matches `alice.github.io`, but not `github.io` or `a.b.github.io`. The domain after
+`*.` needs at least two labels, so `*.org` and `*` are refused, and the server does not start. With a wildcard
+you no longer choose each host: anyone who can publish under the domain can make the server fetch from their
+site. Use wildcards only for domains where one trusted party controls the DNS of every subdomain, as GitHub
+does for `github.io`. **Never** use them for wildcard DNS services such as `nip.io` or `sslip.io`, which resolve
+names to any IP address, internal ones included, and so reopen the SSRF the allowlist prevents.
 
 **With the flag on and the host allowed:**
 - Create checks the identifier (did:web DID, 43 character base64url fingerprint, at most 255 characters) and

@@ -11,7 +11,8 @@
   See admin-guide.md.
 * DID recipients (`ruhnu/did/<did:web DID>/hash/<fingerprint>`, ECDSA P-256 key pinned by its SHA-256
   fingerprint) behind feature flag `cdoc2.ruhnu.enabled`, only for DID hosts in
-  `cdoc2.ruhnu.did.allowed-hosts` (default none; checked on create, `400`, and before every fetch, `404`).
+  `cdoc2.ruhnu.did.allowed-hosts` (default none; `host`, `host:port` or wildcard `*.domain`, matching one
+  DNS label; checked on create, `400`, and before every fetch, `404`).
   Get-share verifies the auth token against the key in its `jwk` header, then fetches the DID document on
   every request (`cdoc2.ruhnu.did.connect-timeout`, overall deadline `cdoc2.ruhnu.did.request-timeout`,
   default PT3S): `503` if the DID host is unavailable, `404` if the document no longer lists the key. The
