@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.context.TestPropertySource;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -111,6 +113,20 @@ class RuhnuSshPkApiTests extends RuhnuApiTestBase {
     @Test
     void shouldStillRejectTooLongRecipient() throws Exception {
         assertEquals(400, createShare("ruhnu/pk/" + "A".repeat(247), null).statusCode());
+        assertEquals(0, shareRepository.count());
+    }
+
+    @Test
+    void shouldRejectUnknownRuhnuKindAndLongNonSshRecipient() throws Exception {
+        String blob = key.recipientId().substring(SshPublicKeyParser.RECIPIENT_ID_PREFIX.length());
+        List<String> invalid = List.of(
+            "ruhnu/pK/" + blob,                             // typo in the kind
+            "ruhnu/xyz/whatever",                           // unknown kind
+            "etsi/PNOEE-48010010101" + "0".repeat(20));     // longer than the upstream 32 characters
+
+        for (String recipient : invalid) {
+            assertEquals(400, createShare(recipient, null).statusCode(), recipient);
+        }
         assertEquals(0, shareRepository.count());
     }
 
@@ -244,6 +260,22 @@ class RuhnuSshPkApiTests extends RuhnuApiTestBase {
         String otherShareId = saveShare(key.recipientId(), Instant.now().plus(Duration.ofDays(1)));
         String token = SshPkTestData.createAuthToken(
             key.recipientId(), key.keyPair(), baseUrl, otherShareId, nonceFor(otherShareId));
+
+        assertRefused(401, getShare(shareId, token));
+    }
+
+    // the nonce is appended to the "aud" URL as is: "...?nonce=" + nonce
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "!!!",          // not base64url
+        "x&=",          // parameter without a name
+        "a&nonce=b",    // duplicate parameter
+        "%%%"           // invalid percent-encoding
+    })
+    void shouldReturn401ForMalformedAudience(String nonce) throws Exception {
+        String shareId = saveShare(key.recipientId(), Instant.now().plus(Duration.ofDays(1)));
+        String token = SshPkTestData.createAuthToken(
+            key.recipientId(), key.keyPair(), baseUrl, shareId, nonce);
 
         assertRefused(401, getShare(shareId, token));
     }

@@ -75,6 +75,9 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     /** Upstream recipient maxLength, enforced while ruhnu features are disabled */
     private static final int UPSTREAM_RECIPIENT_MAX_LENGTH = 32;
 
+    /** Prefix of all ruhnu recipient kinds; "ruhnu/pk/" and "ruhnu/did/" are the only ones supported */
+    private static final String RUHNU_RECIPIENT_PREFIX = "ruhnu/";
+
     /** Release audit log, written while ruhnu features are enabled */
     private static final Logger AUDIT_LOG = LoggerFactory.getLogger("ee.cyber.cdoc2.server.audit");
 
@@ -166,13 +169,19 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             keyShare.getShare().length, keyShare.getRecipient()
         );
 
-        if (!ruhnuConfig.enabled() && keyShare.getRecipient().length() > UPSTREAM_RECIPIENT_MAX_LENGTH) {
-            // upstream API document limits recipient to 32 characters
-            log.warn("Recipient longer than {} characters", UPSTREAM_RECIPIENT_MAX_LENGTH);
+        String recipient = keyShare.getRecipient();
+        if (ruhnuConfig.enabled() && RuhnuRecipientKind.of(recipient) != RuhnuRecipientKind.NONE) {
+            if (!isValidRuhnuRecipient(recipient)) {
+                return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+            }
+        } else if (ruhnuConfig.enabled() && recipient.startsWith(RUHNU_RECIPIENT_PREFIX)) {
+            // no other "ruhnu/" recipient kind is supported, refuse typos such as "ruhnu/pK/"
+            log.warn("Unsupported ruhnu recipient kind");
             return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-        }
-
-        if (ruhnuConfig.enabled() && !isValidRuhnuRecipient(keyShare.getRecipient())) {
+        } else if (recipient.length() > UPSTREAM_RECIPIENT_MAX_LENGTH) {
+            // upstream API document limits recipient to 32 characters; only "ruhnu/pk/" and "ruhnu/did/"
+            // recipients are longer
+            log.warn("Recipient longer than {} characters", UPSTREAM_RECIPIENT_MAX_LENGTH);
             return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
         }
 
@@ -559,6 +568,9 @@ public class KeyShareApiService implements KeySharesApiDelegate {
         if (ruhnuConfig.enabled() && RuhnuRecipientKind.of(recipient) == RuhnuRecipientKind.PK) {
             maxDuration = ruhnuConfig.pk().maxExpirationDuration();
             defaultDuration = ruhnuConfig.pk().defaultExpirationDuration();
+            if (defaultDuration.compareTo(maxDuration) > 0) {
+                defaultDuration = maxDuration;
+            }
         } else {
             maxDuration = Duration.parse(keyShareExpiryConfig.maxExpirationDuration());
             defaultDuration = Duration.parse(keyShareExpiryConfig.defaultExpirationDuration());

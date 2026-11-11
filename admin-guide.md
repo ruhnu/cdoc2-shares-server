@@ -163,6 +163,8 @@ and the relaxed API document. Both only widen what is accepted.
 **With the flag on:**
 - Shares can be created for recipients `ruhnu/pk/<base64 OpenSSH public key blob>`. The key must be ECDSA
   P-256 (`ecdsa-sha2-nistp256`) and the blob padded standard base64, otherwise create responds `400`.
+  Any other recipient starting with `ruhnu/`, apart from `ruhnu/did/` (see DID recipients below), gets `400`,
+  and other recipients are still limited to 32 characters.
 - `POST /key-shares/{shareId}/nonce` without both session headers issues a nonce for a `ruhnu/pk/` share
   (`404` if the share does not exist or has expired, `400` for other recipients). Requests with a session
   header are handled as before.
@@ -171,7 +173,9 @@ and the relaxed API document. Both only widen what is accepted.
   are needed. The audience, shareId and nonce checks are the same as for Smart-ID/Mobile-ID, and the share is
   released only if `iss` equals the share recipient. Other tokens take the Smart-ID/Mobile-ID path unchanged.
 - `ruhnu/pk/` shares get the `cdoc2.ruhnu.pk.*` lifetimes. A client may request a shorter one with
-  `x-expiry-time`; a longer one is cut to the maximum. Other recipients keep `key-share.*-expiration-duration`.
+  `x-expiry-time`; a longer one is cut to the maximum. If the default is
+  configured longer than the maximum, the maximum is used as the default and the server logs a warning at
+  startup. Other recipients keep `key-share.*-expiration-duration`.
 - Every successful share release, for all recipient types, is logged at `INFO` to logger
   `ee.cyber.cdoc2.server.audit`: `Key share released: shareId=..., recipient=..., time=...`.
   For `ruhnu/pk/` recipients `recipient` is the key's OpenSSH fingerprint (`ruhnu/pk:SHA256:...`, as shown
