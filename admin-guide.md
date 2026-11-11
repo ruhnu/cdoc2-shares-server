@@ -163,6 +163,7 @@ and the relaxed API document. Both only widen what is accepted.
 **With the flag on:**
 - Shares can be created for recipients `ruhnu/pk/<base64 OpenSSH public key blob>`. The key must be ECDSA
   P-256 (`ecdsa-sha2-nistp256`) and the blob padded standard base64, otherwise create responds `400`.
+  Any other recipient starting with `ruhnu/` gets `400`, and other recipients are still limited to 32 characters.
 - `POST /key-shares/{shareId}/nonce` without both session headers issues a nonce for a `ruhnu/pk/` share
   (`404` if the share does not exist or has expired, `400` for other recipients). Requests with a session
   header are handled as before.

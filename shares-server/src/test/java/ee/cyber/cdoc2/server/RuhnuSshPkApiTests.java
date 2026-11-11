@@ -107,6 +107,20 @@ class RuhnuSshPkApiTests extends RuhnuApiTestBase {
         assertEquals(0, shareRepository.count());
     }
 
+    @Test
+    void shouldRejectUnknownRuhnuKindAndLongNonSshRecipient() throws Exception {
+        String blob = key.recipientId().substring(SshPublicKeyParser.RECIPIENT_ID_PREFIX.length());
+        List<String> invalid = List.of(
+            "ruhnu/pK/" + blob,                             // typo in the kind
+            "ruhnu/xyz/whatever",                           // unknown kind
+            "etsi/PNOEE-48010010101" + "0".repeat(20));     // longer than the upstream 32 characters
+
+        for (String recipient : invalid) {
+            assertEquals(400, createShare(recipient, null).statusCode(), recipient);
+        }
+        assertEquals(0, shareRepository.count());
+    }
+
     // --- nonce ---
 
     @Test

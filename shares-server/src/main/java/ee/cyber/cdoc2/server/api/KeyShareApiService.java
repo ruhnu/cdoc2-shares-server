@@ -71,6 +71,9 @@ public class KeyShareApiService implements KeySharesApiDelegate {
     /** Upstream recipient maxLength, enforced while ruhnu features are disabled */
     private static final int UPSTREAM_RECIPIENT_MAX_LENGTH = 32;
 
+    /** Prefix of all ruhnu recipient kinds; "ruhnu/pk/" is the only one supported */
+    private static final String RUHNU_RECIPIENT_PREFIX = "ruhnu/";
+
     /** Release audit log, written while ruhnu features are enabled */
     private static final Logger AUDIT_LOG = LoggerFactory.getLogger("ee.cyber.cdoc2.server.audit");
 
@@ -140,19 +143,22 @@ public class KeyShareApiService implements KeySharesApiDelegate {
             keyShare.getShare().length, keyShare.getRecipient()
         );
 
-        if (!ruhnuConfig.enabled() && keyShare.getRecipient().length() > UPSTREAM_RECIPIENT_MAX_LENGTH) {
-            // upstream API document limits recipient to 32 characters
-            log.warn("Recipient longer than {} characters", UPSTREAM_RECIPIENT_MAX_LENGTH);
-            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-        }
-
-        if (ruhnuConfig.enabled() && isSshPkRecipient(keyShare.getRecipient())) {
+        String recipient = keyShare.getRecipient();
+        if (ruhnuConfig.enabled() && isSshPkRecipient(recipient)) {
             try {
-                SshPublicKeyParser.validateRecipientId(keyShare.getRecipient());
+                SshPublicKeyParser.validateRecipientId(recipient);
             } catch (InvalidSshPublicKeyException e) {
                 log.warn("Invalid SSH public key recipient: {}", e.getMessage());
                 return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
             }
+        } else if (ruhnuConfig.enabled() && recipient.startsWith(RUHNU_RECIPIENT_PREFIX)) {
+            // no other "ruhnu/" recipient kind is supported, refuse typos such as "ruhnu/pK/"
+            log.warn("Unsupported ruhnu recipient kind");
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
+        } else if (recipient.length() > UPSTREAM_RECIPIENT_MAX_LENGTH) {
+            // upstream API document limits recipient to 32 characters; only "ruhnu/pk/" recipients are longer
+            log.warn("Recipient longer than {} characters", UPSTREAM_RECIPIENT_MAX_LENGTH);
+            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
         }
 
         ExpiryTimeData expiryTimeData = getExpiryTime(keyShare.getRecipient(), xExpiryTime);
