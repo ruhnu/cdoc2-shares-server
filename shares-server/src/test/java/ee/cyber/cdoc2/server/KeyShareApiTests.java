@@ -20,6 +20,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
@@ -46,6 +48,9 @@ import static org.mockito.Mockito.when;
 
 
 @Slf4j
+// The mocked clock is in the real past, so shares that are unexpired for the mocked clock are
+// expired for the DB. Disable the scheduled clean-up so it cannot delete them mid-test.
+@TestPropertySource(properties = "key-share.expired.clean-up.cron=-")
 class KeyShareApiTests extends KeyShareIntegrationTest {
     private static final byte[] SHARE = new byte[128];
     private static final String SHARE_RECIPIENT = TEST_ETSI_RECIPIENT;
@@ -83,6 +88,9 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
 
     @Autowired
     private KeyShareExpiryConfigProperties keyShareExpiryConfig;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     public void setup() throws Exception {
@@ -346,6 +354,79 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
     }
 
     @Test
+    void createNonceShouldReturnNotFoundForExpiredKeyShare() {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED.minus(Duration.ofHours(1))
+        ).getShareId();
+
+        ApiException ex = assertThrows(
+            ApiException.class,
+            () -> client.createNonce(
+                shareId,
+                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+                SID_SIGNING_CERTIFICATE_BASE64URL
+            )
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getCode());
+        assertEquals(0, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void createNonceShouldReturnNotFoundForKeyShareExpiringNow() {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED
+        ).getShareId();
+
+        ApiException ex = assertThrows(
+            ApiException.class,
+            () -> client.createNonce(
+                shareId,
+                SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+                SID_SIGNING_CERTIFICATE_BASE64URL
+            )
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND.value(), ex.getCode());
+        assertEquals(0, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void shouldCreateKeyShareNonceForKeyShareNotYetExpired() throws Exception {
+        String shareId = this.saveKeyShare(
+            createKeyShare(),
+            INSTANT_NOW_SESSION_TOKEN_NOT_EXPIRED.plusSeconds(1)
+        ).getShareId();
+
+        NonceResponse response = client.createNonce(
+            shareId,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_SIGNING_CERTIFICATE_BASE64URL
+        );
+
+        assertNotNull(response);
+        assertEquals(1, this.shareNonceRepository.count());
+    }
+
+    @Test
+    void shouldCreateKeyShareNonceForKeyShareWithoutExpiryTime() throws Exception {
+        // shares created before the expiry_time column was added have no expiry and never expire
+        String shareId = this.saveKeyShare(createKeyShare()).getShareId();
+        jdbcTemplate.update("UPDATE key_material_share SET expiry_time = NULL WHERE share_id = ?", shareId);
+
+        NonceResponse response = client.createNonce(
+            shareId,
+            SESSION_TOKEN_WITH_FILTERED_DISCLOSURES_BASE64URL,
+            SID_SIGNING_CERTIFICATE_BASE64URL
+        );
+
+        assertNotNull(response);
+        assertEquals(1, this.shareNonceRepository.count());
+    }
+
+    @Test
     void createNonceShouldReturnUnauthorizedWhenSessionTokenExpired() {
         String shareId = "SHARE_ID_MIN_LENGTH_SHOULD_BE_32";
         when(clock.instant()).thenReturn(INSTANT_AFTER_SESSION_TOKEN_EXPIRED);
@@ -501,11 +582,22 @@ class KeyShareApiTests extends KeyShareIntegrationTest {
      * @return the saved key share
      */
     protected KeyShareDb saveKeyShare(ee.cyber.cdoc2.client.model.KeyShare dto) {
+        return saveKeyShare(dto, EXPIRY_TIME);
+    }
+
+    /**
+     * Saves the key share into database with the given expiry time
+     *
+     * @param dto the key share dto
+     * @param expiryTime the expiry time of the key share
+     * @return the saved key share
+     */
+    protected KeyShareDb saveKeyShare(ee.cyber.cdoc2.client.model.KeyShare dto, Instant expiryTime) {
         return this.shareRepository.save(
             new KeyShareDb()
                 .setRecipient(dto.getRecipient())
                 .setShare(dto.getShare())
-                .setExpiryTime(EXPIRY_TIME)
+                .setExpiryTime(expiryTime)
         );
     }
 
