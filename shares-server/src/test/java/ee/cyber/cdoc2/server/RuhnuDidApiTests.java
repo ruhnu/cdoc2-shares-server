@@ -71,7 +71,8 @@ class RuhnuDidApiTests extends RuhnuApiTestBase {
 
     @DynamicPropertySource
     static void allowDidHost(DynamicPropertyRegistry registry) {
-        registry.add("cdoc2.ruhnu.did.allowed-hosts", () -> "localhost:" + DID_HOST.httpsPort());
+        // "*.github.io" only for the wildcard create tests; nothing is fetched from it
+        registry.add("cdoc2.ruhnu.did.allowed-hosts", () -> "localhost:" + DID_HOST.httpsPort() + ",*.github.io");
     }
 
     @BeforeEach
@@ -131,6 +132,26 @@ class RuhnuDidApiTests extends RuhnuApiTestBase {
         }
         assertEquals(0, shareRepository.count());
         assertNoDidRequest();
+    }
+
+    @Test
+    void shouldCreateDidShareForHostMatchedByWildcard() throws Exception {
+        String wildcardRecipient = DidTestData.didRecipientId("did:web:alice.github.io", alice);
+
+        HttpResponse<String> resp = createShare(wildcardRecipient, null);
+
+        assertEquals(201, resp.statusCode(), resp.body());
+        assertEquals(wildcardRecipient, shareRepository.findById(shareIdFrom(resp)).orElseThrow().getRecipient());
+    }
+
+    @Test
+    void shouldRefuseWildcardDomainItselfAndDeeperSubdomains() throws Exception {
+        for (String otherDid : List.of("did:web:github.io:p:alice", "did:web:a.b.github.io")) {
+            HttpResponse<String> resp = createShare(DidTestData.didRecipientId(otherDid, alice), null);
+
+            assertEquals(400, resp.statusCode(), otherDid);
+        }
+        assertEquals(0, shareRepository.count());
     }
 
     @Test

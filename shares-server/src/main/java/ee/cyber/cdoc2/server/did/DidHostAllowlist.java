@@ -13,47 +13,70 @@ import ee.cyber.cdoc2.auth.DidWeb;
 
 /**
  * DID hosts from {@code cdoc2.ruhnu.did.allowed-hosts}. Each entry is "host" or "host:port"; a missing port means
- * 443. Hosts compare case-insensitively, ports exactly.
+ * 443. Hosts compare case-insensitively, ports exactly. A host may be a wildcard "*.domain", where domain has at
+ * least two labels; it matches a host of exactly one DNS label followed by ".domain", as in TLS certificates.
  */
 public final class DidHostAllowlist implements DidHostPolicy {
 
-    private static final Pattern ENTRY = Pattern.compile("([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?");
+    private static final Pattern ENTRY = Pattern.compile("(\\*\\.)?([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?");
+    /** Domain of a wildcard entry: at least two non-empty labels */
+    private static final Pattern WILDCARD_DOMAIN = Pattern.compile("[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+");
     private static final int MAX_PORT = 65535;
 
     private final Set<String> hostPorts;
+    /** Wildcard entries, as "domain:port" of "*.domain" */
+    private final Set<String> wildcardDomainPorts;
 
     /**
-     * @param allowedHosts entries "host" or "host:port"
+     * @param allowedHosts entries "host", "host:port", "*.domain" or "*.domain:port"
      * @throws IllegalArgumentException if an entry is malformed
      */
     public DidHostAllowlist(List<String> allowedHosts) {
-        Set<String> parsed = new HashSet<>();
+        Set<String> exact = new HashSet<>();
+        Set<String> wildcards = new HashSet<>();
         for (String entry : allowedHosts) {
             Matcher matcher = ENTRY.matcher(entry.strip());
             if (!matcher.matches()) {
                 throw new IllegalArgumentException("Invalid cdoc2.ruhnu.did.allowed-hosts entry \"" + entry
-                    + "\", expected \"host\" or \"host:port\"");
+                    + "\", expected \"host\", \"host:port\", \"*.domain\" or \"*.domain:port\"");
             }
-            int port = (matcher.group(2) == null) ? DidWeb.DEFAULT_PORT : Integer.parseInt(matcher.group(2));
+            int port = (matcher.group(3) == null) ? DidWeb.DEFAULT_PORT : Integer.parseInt(matcher.group(3));
             if (port < 1 || port > MAX_PORT) {
                 throw new IllegalArgumentException("Invalid port in cdoc2.ruhnu.did.allowed-hosts entry \""
                     + entry + "\"");
             }
-            parsed.add(key(matcher.group(1), port));
+            String host = matcher.group(2);
+            if (matcher.group(1) == null) {
+                exact.add(key(host, port));
+            } else if (WILDCARD_DOMAIN.matcher(host).matches()) {
+                wildcards.add(key(host, port));
+            } else {
+                throw new IllegalArgumentException("Invalid wildcard in cdoc2.ruhnu.did.allowed-hosts entry \""
+                    + entry + "\", the domain after \"*.\" needs at least two labels");
+            }
         }
-        this.hostPorts = Set.copyOf(parsed);
+        this.hostPorts = Set.copyOf(exact);
+        this.wildcardDomainPorts = Set.copyOf(wildcards);
     }
 
     @Override
     public boolean allows(String host, int port) {
-        return host != null && hostPorts.contains(key(host, port));
+        if (host == null) {
+            return false;
+        }
+        if (hostPorts.contains(key(host, port))) {
+            return true;
+        }
+        // a wildcard covers exactly one label: compare the host without its first label
+        int firstDot = host.indexOf('.');
+        return firstDot > 0 && wildcardDomainPorts.contains(key(host.substring(firstDot + 1), port));
     }
 
     /**
      * @return true if no host is allowed
      */
     public boolean isEmpty() {
-        return hostPorts.isEmpty();
+        return hostPorts.isEmpty() && wildcardDomainPorts.isEmpty();
     }
 
     private static String key(String host, int port) {
