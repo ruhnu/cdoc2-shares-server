@@ -18,10 +18,17 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
  * header and recipient length checks that the upstream API document makes mandatory. Pinned to false, so that
  * the class also runs when the flag is switched on for the whole suite.
  */
-@TestPropertySource(properties = "cdoc2.ruhnu.enabled=false")
+@TestPropertySource(properties = {
+    "cdoc2.ruhnu.enabled=false",
+    // ignored while the flag is off
+    "cdoc2.ruhnu.did.allowed-hosts=localhost:8444"
+})
 class RuhnuDisabledApiTests extends RuhnuApiTestBase {
 
+    private static final String DID = "did:web:localhost%3A8444:p:alice";
+
     private final SshKey key = SshKey.generate();
+    private final String didRecipient = DidTestData.didRecipientId(DID, key);
 
     @Test
     void shouldRefuseSshPkRecipientAndStoreNothing() throws Exception {
@@ -80,6 +87,30 @@ class RuhnuDisabledApiTests extends RuhnuApiTestBase {
         var control = getShare(shareId, token, all);
         assertNotEquals(400, control.statusCode());
         assertEquals(0, auditLog.list.size());
+    }
+
+    @Test
+    void shouldRefuseDidRecipientEvenForAllowedHostAndStoreNothing() throws Exception {
+        assertEquals(400, createShare(didRecipient, null).statusCode());
+        assertEquals(0, shareRepository.count());
+    }
+
+    @Test
+    void nonceShouldRequireSessionHeadersForDidShare() throws Exception {
+        // a ruhnu/did/ share can only exist if created while the flag was on
+        String shareId = saveShare(didRecipient, Instant.now().plus(Duration.ofDays(1)));
+
+        assertEquals(400, createNonce(shareId, Map.of()).statusCode());
+        assertEquals(0, shareNonceRepository.count());
+    }
+
+    @Test
+    void didTokenShouldNotBeAcceptedWhileDisabled() throws Exception {
+        String shareId = saveShare(didRecipient, Instant.now().plus(Duration.ofDays(1)));
+        String token = DidTestData.createDidAuthToken(didRecipient, key.keyPair(),
+            (java.security.interfaces.ECPublicKey) key.keyPair().getPublic(), baseUrl, shareId, nonceFor(shareId));
+
+        assertRefused(400, getShare(shareId, token));
     }
 
     @Test

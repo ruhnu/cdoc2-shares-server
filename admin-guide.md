@@ -163,7 +163,8 @@ and the relaxed API document. Both only widen what is accepted.
 **With the flag on:**
 - Shares can be created for recipients `ruhnu/pk/<base64 OpenSSH public key blob>`. The key must be ECDSA
   P-256 (`ecdsa-sha2-nistp256`) and the blob padded standard base64, otherwise create responds `400`.
-  Any other recipient starting with `ruhnu/` gets `400`, and other recipients are still limited to 32 characters.
+  Any other recipient starting with `ruhnu/`, apart from `ruhnu/did/` (see DID recipients below), gets `400`,
+  and other recipients are still limited to 32 characters.
 - `POST /key-shares/{shareId}/nonce` without both session headers issues a nonce for a `ruhnu/pk/` share
   (`404` if the share does not exist or has expired, `400` for other recipients). Requests with a session
   header are handled as before.
@@ -191,6 +192,86 @@ delete from key_material_share_nonce
  where share_id in (select share_id from key_material_share where recipient = :'r');
 delete from key_material_share where recipient = :'r';
 ```
+
+## DID recipients (ruhnu fork, `cdoc2.ruhnu.did.*`)
+
+A DID recipient is `ruhnu/did/<did:web DID>/hash/<fingerprint>`, for example
+`ruhnu/did/did:web:example.org:p:alice/hash/NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs`. The fingerprint is
+the SHA-256 of the ECDSA P-256 OpenSSH public key blob in unpadded base64url: the `ssh-keygen -l` value after
+`SHA256:` with `+/` replaced by `-_`. A share is released only if the caller signs with that key **and** the
+DID document, fetched at that moment, still lists the key. The fingerprint pins the key in the container, so a
+compromised DID host can withdraw access but cannot grant it.
+
+DID recipients work only while `cdoc2.ruhnu.enabled=true` and only for DID hosts the operator allows:
+
+`application.properties`:
+```
+# DID hosts this server stores DID recipient shares for and fetches DID documents from.
+# Comma separated, each "host" or "host:port" (port 443 when omitted). A host may be a wildcard
+# "*.domain", which matches exactly one more DNS label (see below). Default empty: no DID recipients.
+cdoc2.ruhnu.did.allowed-hosts=did.example.org
+# Timeouts for fetching a DID document: connect, and overall deadline for connect, headers and body.
+# Keep the deadline below the clients' read timeout (cdoc2-cli default 5 s), so that a hanging DID host
+# reaches the user as 503 rather than as a client timeout.
+cdoc2.ruhnu.did.connect-timeout=PT2S
+cdoc2.ruhnu.did.request-timeout=PT3S
+```
+
+**Outbound HTTPS.** The server fetches `https://<host>[:<port>]/<path>/did.json` (or `/.well-known/did.json`
+for a DID without a path) on every share download, from each allowed host, without a cache and without
+following redirects. TLS is validated against the JVM's default trusted CAs; a DID host with a private CA
+needs it in the JVM trust store (`-Djavax.net.ssl.trustStore=...`). Standard proxy settings
+(`https.proxyHost`, `http.nonProxyHosts`) apply. Documents larger than 64 KiB are refused.
+
+**Database connections.** The server sets `spring.jpa.open-in-view=false` by default, so that a share
+download does not hold a database connection while it waits for the DID host (up to
+`cdoc2.ruhnu.did.request-timeout`). Do not set it to `true`: slow DID hosts or replayed requests could then
+take every connection of the pool (`spring.datasource.hikari.maximum-pool-size`, default 10) and stall all
+endpoints.
+
+**The allowlist is required against SSRF.** `POST /key-shares` needs no authentication, so without an
+allowlist anyone could make the server fetch URLs of their choice. It is checked when a share is created
+(`400` for a host not in the list) and again before every fetch (`404`), so removing a host takes effect for
+existing shares. IP addresses are never accepted as DID hosts.
+
+**Wildcard entries.** `*.github.io` lets anyone with a GitHub Pages site host their own DID document
+(`did:web:alice.github.io`) without a configuration change. As in TLS certificates, a wildcard matches exactly
+one DNS label: `*.github.io` matches `alice.github.io`, but not `github.io` or `a.b.github.io`. The domain after
+`*.` needs at least two labels, so `*.org` and `*` are refused, and the server does not start. With a wildcard
+you no longer choose each host: anyone who can publish under the domain can make the server fetch from their
+site. Use wildcards only for domains where one trusted party controls the DNS of every subdomain, as GitHub
+does for `github.io`. **Never** use them for wildcard DNS services such as `nip.io` or `sslip.io`, which resolve
+names to any IP address, internal ones included, and so reopen the SSRF the allowlist prevents.
+
+**With the flag on and the host allowed:**
+- Create checks the identifier (did:web DID, 43 character base64url fingerprint, at most 255 characters) and
+  the host, otherwise `400`. Nothing is fetched on create.
+- `POST /key-shares/{shareId}/nonce` without session headers issues a nonce for a `ruhnu/did/` share, as for
+  `ruhnu/pk/`. The DID is not resolved.
+- `GET /key-shares/{shareId}` with an auth token whose `iss` starts with `ruhnu/did/`:
+  1. the token is verified without network access: the public key in the JWS `jwk` header must have the
+     fingerprint in `iss` and verify the `ES256` signature; audience, shareId and nonce as for other tokens
+     (`401`, or `404` for an unknown or expired nonce);
+  2. the share must exist, be unexpired and have `iss` as its recipient (`404`);
+  3. the DID host must still be allowed (`404`);
+  4. the DID document is fetched: `503` if the DID host cannot be reached, times out, fails TLS or answers
+     `5xx`/`429`; `404` if the document is missing (any other status, including redirects), is for another
+     DID, or does not list the key under `authentication`.
+  Only then is the share released and the release logged.
+- `503` means "try again": nonces are not consumed, so a client can repeat the same request until the nonce
+  expires (`cdoc2.nonce.expiration-seconds`, default 300).
+- The audit log line for a `ruhnu/did/` release has the full `ruhnu/did/` identifier as `recipient`. It names
+  the DID; review that against your privacy rules if your DIDs contain personal identification codes.
+- `ruhnu/did/` shares use the global `key-share.*-expiration-duration` lifetimes (3 years by default, at most
+  5 years), not the `cdoc2.ruhnu.pk.*` ones.
+
+**Revoking access.** Remove the key from the DID document's `authentication`, or remove the DID document.
+The next share download on every shares server is refused. Deleting rows as for `ruhnu/pk/` also works.
+
+**Long lifetimes and key rotation.** Because DID shares live for years, access ends when someone removes the
+key from the DID document, not when the share expires; keep that process in place. A key that is rotated away
+must stay listed until the containers encrypted to it have been re-encrypted, or they can no longer be opened:
+the container pins the old key's fingerprint.
 
 ## Logging
 

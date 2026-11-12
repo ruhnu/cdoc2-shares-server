@@ -359,7 +359,8 @@ class KeyShareApiAuthenticationTest extends KeyShareIntegrationTest {
 
     private KeyShareApiService createService(boolean ruhnuEnabled) {
         RuhnuConfigProperties config = ruhnuEnabled
-            ? new RuhnuConfigProperties(true, RuhnuConfigProperties.disabled().pk())
+            ? new RuhnuConfigProperties(true, RuhnuConfigProperties.disabled().pk(),
+                RuhnuConfigProperties.disabled().did())
             : RuhnuConfigProperties.disabled();
         return new KeyShareApiService(
             new AuthCertificateConfigProperties(false, true),

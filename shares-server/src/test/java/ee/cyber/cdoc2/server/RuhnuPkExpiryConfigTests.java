@@ -20,7 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestPropertySource(properties = {
     "cdoc2.ruhnu.enabled=true",
     "cdoc2.ruhnu.pk.default-expiration-duration=P1D",
-    "cdoc2.ruhnu.pk.max-expiration-duration=P7D"
+    "cdoc2.ruhnu.pk.max-expiration-duration=P7D",
+    "cdoc2.ruhnu.did.allowed-hosts=did.example.org"
 })
 class RuhnuPkExpiryConfigTests extends RuhnuApiTestBase {
 
@@ -44,6 +45,29 @@ class RuhnuPkExpiryConfigTests extends RuhnuApiTestBase {
         assertEquals(201, resp.statusCode());
         assertAbout(before.plus(Duration.ofDays(1)),
             shareRepository.findById(shareIdFrom(resp)).orElseThrow().getExpiryTime());
+    }
+
+    @Test
+    void didShareShouldUseGlobalLifetimesNotPkLifetimes() throws Exception {
+        String didRecipient = DidTestData.didRecipientId("did:web:did.example.org:p:alice", key);
+        Instant before = Instant.now();
+
+        var resp = createShare(didRecipient, null);
+        assertEquals(201, resp.statusCode());
+        assertEquals("false", resp.headers().firstValue("x-expiry-time-adjusted").orElseThrow());
+        assertAbout(before.plus(Duration.ofDays(1095)),
+            shareRepository.findById(shareIdFrom(resp)).orElseThrow().getExpiryTime());
+
+        // 10 days is over the pk max (7 days) but under the global max, so it is not cut
+        Instant tenDays = Instant.now().plus(Duration.ofDays(10)).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var notCut = createShare(didRecipient, tenDays);
+        assertEquals("false", notCut.headers().firstValue("x-expiry-time-adjusted").orElseThrow());
+        assertEquals(tenDays, shareRepository.findById(shareIdFrom(notCut)).orElseThrow().getExpiryTime());
+
+        var cut = createShare(didRecipient, Instant.now().plus(Duration.ofDays(3650)));
+        assertEquals("true", cut.headers().firstValue("x-expiry-time-adjusted").orElseThrow());
+        assertAbout(before.plus(Duration.ofDays(1825)),
+            shareRepository.findById(shareIdFrom(cut)).orElseThrow().getExpiryTime());
     }
 
     @Test

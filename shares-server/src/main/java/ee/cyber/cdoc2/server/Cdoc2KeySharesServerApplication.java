@@ -1,5 +1,7 @@
 package ee.cyber.cdoc2.server;
 
+import java.util.Map;
+
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,10 +40,24 @@ import ee.cyber.cdoc2.server.config.RpServerConfigProperties;
 @EnableScheduling
 public class Cdoc2KeySharesServerApplication implements CommandLineRunner {
 
+    /**
+     * Defaults that application.properties can override. The jar ships no application.properties (all
+     * configuration is external), so the defaults are set here.
+     * <p>
+     * {@code spring.jpa.open-in-view=false}: Spring Boot's default {@code true} holds a JDBC connection for the
+     * whole request once the request has used the database. A "ruhnu/did/" get-share fetches the DID document
+     * (up to {@code cdoc2.ruhnu.did.request-timeout}) after reading the share, so slow DID hosts could otherwise
+     * exhaust the connection pool and stall all endpoints. The server uses no lazy loading outside transactions.
+     */
+    static final Map<String, Object> DEFAULT_PROPERTIES = Map.of(
+        "spring.jpa.open-in-view", "false"
+    );
+
     final BuildProperties buildProperties;
 
     public static void main(String[] args) {
         SpringApplication app = new SpringApplication(Cdoc2KeySharesServerApplication.class);
+        app.setDefaultProperties(DEFAULT_PROPERTIES);
         // capture startup events for startup actuator endpoint
         app.setApplicationStartup(MonitoringUtil.getApplicationStartupInfo());
         app.run(args);

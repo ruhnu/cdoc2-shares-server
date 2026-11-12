@@ -13,6 +13,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
+import ee.cyber.cdoc2.server.config.RuhnuConfigProperties.Did;
 import ee.cyber.cdoc2.server.config.RuhnuConfigProperties.Pk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -38,7 +39,7 @@ class RuhnuConfigPropertiesTest {
 
     @Test
     void shouldWarnWhenDefaultIsLongerThanMax() {
-        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(14), Duration.ofDays(7)));
+        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(14), Duration.ofDays(7)), Did.defaults());
 
         List<ILoggingEvent> events = appender.list;
         assertEquals(1, events.size());
@@ -50,15 +51,15 @@ class RuhnuConfigPropertiesTest {
 
     @Test
     void shouldNotWarnWhenDefaultIsWithinMax() {
-        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(1), Duration.ofDays(7)));
-        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(7), Duration.ofDays(7)));
+        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(1), Duration.ofDays(7)), Did.defaults());
+        new RuhnuConfigProperties(true, new Pk(Duration.ofDays(7), Duration.ofDays(7)), Did.defaults());
 
         assertTrue(appender.list.isEmpty());
     }
 
     @Test
     void shouldNotWarnWhenDisabled() {
-        new RuhnuConfigProperties(false, new Pk(Duration.ofDays(14), Duration.ofDays(7)));
+        new RuhnuConfigProperties(false, new Pk(Duration.ofDays(14), Duration.ofDays(7)), Did.defaults());
 
         assertTrue(appender.list.isEmpty());
     }
